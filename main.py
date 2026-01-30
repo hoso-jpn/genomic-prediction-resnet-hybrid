@@ -17,7 +17,7 @@ wandb.init(project="genomic-resnet-prediction", config={
 })
 
 def main():
-    X, y_multi = load_genomic_data('data/pheno.csv', 'data/geno.csv')
+    X, y_multi = load_genomic_data('data/4J105-3-4_pheno.csv', 'data/4J105-3-4_geno.csv')
     strain_ids = [f"S{i}" for i in range(len(X))]
     config = wandb.config
     
