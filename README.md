@@ -11,15 +11,17 @@
 - **Rigorous Validation**: 10-fold Cross-Validationを50回反復し、統計的有意差（Paired t-test）を検証。
 - **W&B Integration**: Weights & Biasesによるリアルタイムな学習ログの監視とハイパーパラメータ管理。
 
-## プロジェクト構成
+- ## プロジェクト構成
 ```text
 genomic-resnet-prediction/
-├── data/              # 表現型・遺伝型データ(CSV)
+├── data/              # SoyNAM公開表現型・遺伝型データ(CSV)
 ├── model.py           # GenomicResNetの定義
 ├── utils.py           # R(sommer)連携・データ前処理
 ├── main.py            # 50反復検証の実行スクリプト
 ├── requirements.txt   # 依存ライブラリ
 └── LICENSE            # MIT License
+```
+
 ## 実験結果と統計検証 (Benchmark Results)
 
 モデルの堅牢性を検証するため、10-fold Cross-Validationを50回反復（計500回の試行）した結果は以下の通りです。
