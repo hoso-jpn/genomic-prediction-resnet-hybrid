@@ -26,7 +26,7 @@ genomic-resnet-prediction/
 
 モデルの堅牢性を検証するため、10-fold Cross-Validationを50回反復（計500回の試行）した結果は以下の通りです。
 
-### 予測精度の比較 (Pearson's r)
+### 予測能力（PA）の比較 (Pearson's r)
 | Model | Mean Accuracy | Std Dev | Max Accuracy |
 | :--- | :---: | :---: | :---: |
 | **ST-GBLUP** | 0.2730 | 0.0365 | 0.3573 |
