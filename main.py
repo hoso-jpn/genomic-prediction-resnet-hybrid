@@ -9,9 +9,9 @@ from utils import load_genomic_data, calculate_gblup_residuals
 
 # 1. W&B初期化
 wandb.init(project="genomic-resnet-prediction", config={
-    "lr": 0.0001,
-    "weight_decay": 0.02,
-    "epochs": 150,    # 150くらいに増やしてLossの減り方を見る
+    "lr": 0.00005,
+    "weight_decay": 0.1,
+    "epochs": 100,    # 150くらいに増やしてLossの減り方を見る
     "repeats": 20,
     "folds": 10
 })
