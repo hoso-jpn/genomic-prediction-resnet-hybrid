@@ -1,3 +1,4 @@
+#model.py
 import torch
 import torch.nn as nn
 
@@ -15,7 +16,7 @@ class ResidualBlock(nn.Module):
     def forward(self, x):
         return x + self.block(x)
 
-class GenomicResNet(nn.Module):
+class GenomicResNet(nn.Module):  # ← この名前が正確かチェック！
     def __init__(self, input_dim, hidden_dim=512, num_blocks=3):
         super().__init__()
         self.input_layer = nn.Sequential(
