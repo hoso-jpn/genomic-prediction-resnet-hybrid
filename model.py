@@ -17,7 +17,7 @@ class ResidualBlock(nn.Module):
         return x + self.block(x)
 
 class GenomicResNet(nn.Module):  # ← この名前が正確かチェック！
-    def __init__(self, input_dim, hidden_dim=512, num_blocks=3):
+    def __init__(self, input_dim, hidden_dim=256, num_blocks=3):
         super().__init__()
         self.input_layer = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
