@@ -10,7 +10,6 @@ graph LR
     B --> D[Residuals]
     D --> E[ResNet]
     E --> F[Non-linear Adjustment]
-    C & F --> G[Hybrid Final Prediction]
 ```
 
 従来のゲノミック予測の線形モデル（GBLUP）と深層学習（ResNet）を統合し、大豆（SoyNAM）のゲノムデータから収量予測を行うハイブリッド・フレームワークです。
