@@ -11,25 +11,31 @@ from utils import load_genomic_data, calculate_gblup_residuals
 wandb.init(project="genomic-resnet-prediction", config={
     "lr": 0.00005,
     "weight_decay": 0.1,
-    "epochs": 100,    # 150くらいに増やしてLossの減り方を見る
+    "epochs": 100,
     "repeats": 20,
     "folds": 10
 })
 
 def main():
-    # データの読み込み（strain_idsも関数から受け取る）
     X, y_multi, strain_ids = load_genomic_data('data/4J105-3-4_pheno.csv', 'data/4J105-3-4_geno.csv')
     config = wandb.config
     
     all_hybrid_acc = []
+    all_mt_gblup_acc = [] # MT-GBLUP比較用
 
     for r in range(config.repeats):
         kf = KFold(n_splits=config.folds, shuffle=True, random_state=42+r)
-        fold_acc = []
+        hybrid_fold_acc = []
+        mt_fold_acc = []
         
         for fold, (train_idx, test_idx) in enumerate(kf.split(X)):
-            # GBLUPの計算
+            # GBLUPの計算 (u_mtはMT-GBLUP単体の予測値)
             u_mt, res_yield = calculate_gblup_residuals(X, y_multi, train_idx, test_idx, strain_ids)
+            y_true = y_multi.iloc[test_idx]['Yield'].values
+            
+            # --- MT-GBLUP単体の精度計算 ---
+            mt_acc = np.corrcoef(y_true, u_mt[test_idx])[0, 1]
+            mt_fold_acc.append(mt_acc)
             
             # ResNet学習
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,26 +54,35 @@ def main():
                 loss.backward()
                 optimizer.step()
                 
-                # ★ 10エポックごとにLossをW&Bに記録
                 if epoch % 10 == 0:
-                    wandb.log({"train_loss": loss.item(), "repeat": r, "fold": fold})
+                    wandb.log({"train_loss": loss.item(), "repeat_idx": r, "fold_idx": fold})
             
-            # 予測
+            # --- Hybrid (MT-GBLUP + ResNet) の予測 ---
             model.eval()
             with torch.no_grad():
                 dl_res_pred = model(torch.tensor(X[test_idx]).to(device)).cpu().numpy().flatten()
             
             hybrid_pred = u_mt[test_idx] + dl_res_pred
-            y_true = y_multi.iloc[test_idx]['Yield'].values
-            acc = np.corrcoef(y_true, hybrid_pred)[0, 1]
-            fold_acc.append(acc)
+            h_acc = np.corrcoef(y_true, hybrid_pred)[0, 1]
+            hybrid_fold_acc.append(h_acc)
             
-        avg_acc = np.mean(fold_acc)
-        all_hybrid_acc.append(avg_acc)
+        # リピートごとの平均精度
+        avg_h_acc = np.mean(hybrid_fold_acc)
+        avg_mt_acc = np.mean(mt_fold_acc)
         
-        # 精度の記録
-        wandb.log({"repeat_accuracy": avg_acc, "mean_so_far": np.mean(all_hybrid_acc)})
-        print(f"Repeat {r+1}/{config.repeats} - Acc: {avg_acc:.4f}")
+        all_hybrid_acc.append(avg_h_acc)
+        all_mt_gblup_acc.append(avg_mt_acc)
+        
+        # W&Bに両方の精度をログ
+        wandb.log({
+            "repeat": r + 1,
+            "accuracy/hybrid": avg_h_acc,
+            "accuracy/mt_gblup": avg_mt_acc,
+            "mean_so_far/hybrid": np.mean(all_hybrid_acc),
+            "mean_so_far/mt_gblup": np.mean(all_mt_gblup_acc)
+        })
+        
+        print(f"Repeat {r+1}/{config.repeats} | Hybrid: {avg_h_acc:.4f} | MT-GBLUP: {avg_mt_acc:.4f}")
 
 if __name__ == "__main__":
     main()
