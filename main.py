@@ -9,11 +9,12 @@ from utils import load_genomic_data, calculate_gblup_residuals
 
 # 1. W&B初期化
 wandb.init(project="genomic-resnet-prediction", config={
-    "lr": 0.00005,
+    "lr": 0.0001,           # Dropout導入に伴い、学習率を少し調整
     "weight_decay": 0.1,
     "epochs": 100,
     "repeats": 20,
-    "folds": 10
+    "folds": 10,
+    "dropout_rate": 0.4     # configから変更可能に
 })
 
 def main():
