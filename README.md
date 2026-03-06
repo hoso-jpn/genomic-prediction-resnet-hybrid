@@ -79,3 +79,13 @@ python main.py
 
 # データ引用
 - 本解析には、SoyNAMプロジェクト（Soybean Nested Association Mapping）より提供された公開データセットを使用しています。
+  
+### Data Availability
+The dataset used in this study is from the SoyNAM project.
+Please download the following files from the official source:
+
+Source URL: [SoyNAMのデータ公開URLをここに貼る]
+
+Files required: genotype_data.csv, phenotype_data.csv
+
+After downloading, please place the files in the /data directory of this repository.
