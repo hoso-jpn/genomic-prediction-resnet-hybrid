@@ -80,7 +80,7 @@ python main.py
 # データ引用
 - 本解析には、SoyNAMプロジェクト（Soybean Nested Association Mapping）より提供された公開データセットを使用しています。
   
-### Data Availability
+# Data Availability
 The dataset used in this study is from the SoyNAM project.
 Please download the following files from the official source:
 
