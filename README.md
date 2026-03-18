@@ -32,13 +32,16 @@ graph LR
 ## プロジェクト構成
 
 ```text
-genomic-resnet-prediction/
-├── data/              # SoyNAM公開表現型・遺伝型データ(CSV)
-├── model.py           # GenomicResNetの定義（PyTorch）
-├── utils.py           # rpy2を用いたR(sommer)との連携・データ前処理
-├── main.py            # 50反復検証の実行スクリプト
-├── requirements.txt   # 依存ライブラリ一覧
-└── LICENSE            # MIT License
+genomic-prediction-resnet-hybrid/
+├── data/               # SoyNAM公開表現型・遺伝型データ
+│   ├── NAM03/          # High yield in drought
+│   ├── NAM24/          # High yielding
+│   └── NAM40/          # Diverse ancestry
+├── processed_data/     # preprocess.py によって生成される統合済み行列
+├── preprocess.py       # 複数家系の統合・数値化・メモリ最適化スクリプト
+├── train.py            # Hybrid ResNet の学習・検証スクリプト
+├── environment.yml     # Conda環境再現用ファイル
+└── LICENSE             # MIT License
 ```
 # セットアップ
 - 必要条件
@@ -55,6 +58,13 @@ cd genomic-resnet-prediction
 Bash
 ```text
 pip install -r requirements.txt
+```
+
+- データの前処理
+data/ フォルダ内に各家系のファイルを配置し、以下のスクリプトを実行して統合データセットを作成します。
+Bash
+```text
+python preprocess.py
 ```
 
 - 実行
@@ -84,8 +94,5 @@ python main.py
 The dataset used in this study is from the SoyNAM project.
 Please download the following files from the official source:
 
-Source URL: https://www.soybase.org/projects/SoyNAM/pi_398881/
-
-Files required: genotype_data.csv, phenotype_data.csv
-
-After downloading, please place the files in the /data directory of this repository.
+Source URL: https://www.soybase.org/projects/SoyNAM/
+Files required: genotype_data.csv, phenotype_data.csv (家系別に各ディレクトリへ配置)
