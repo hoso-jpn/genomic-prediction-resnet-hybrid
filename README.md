@@ -94,5 +94,5 @@ python main.py
 The dataset used in this study is from the SoyNAM project.
 Please download the following files from the official source:
 
-Source URL: https://www.soybase.org/projects/SoyNAM/
-Files required: genotype_data.csv, phenotype_data.csv (家系別に各ディレクトリへ配置)
+- Source URL: https://www.soybase.org/projects/SoyNAM/
+- Files required: genotype_data.csv, phenotype_data.csv (家系別に各ディレクトリへ配置)
