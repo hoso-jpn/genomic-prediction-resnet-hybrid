@@ -29,30 +29,31 @@ graph TD
 
 ## 概要
 
-本プロジェクトは、線形モデルである **MT-GBLUP (Multi-Trait Genomic Best Linear Unbiased Prediction)** が捉えきれない、遺伝子間の非線形な相互作用（エピスタシス等）を **ResNet (Residual Network)** で抽出することを目指しています。
+本プロジェクトは、線形モデル（Ridge/GBLUP）が捉えきれない遺伝子間の非線形な相互作用（エピスタシス等）を、Gated-Residual Learning（ゲート付き残差学習） を用いた ResNet で抽出することを目指しています。
 
-統計的な厳密さと深層学習の柔軟性を組み合わせることで、従来の限界を超える予測精度の達成をターゲットとしています。
+単なるスタッキングではなく、線形成分と非線形成分を同時に最適化（End-to-End）することで、相加的効果を維持しつつ、特定の集団における相乗効果を適応的に取り込むアーキテクチャを採用しています。
 
 
 
 ## 特徴
 
-- **Hybrid Architecture**: `sommer` (R) による線形推定と、`PyTorch` (Python) による残差補正を組み合わせた二段階予測。
-- **Optimized ResNet**: ゲノムデータの高次元特性に対応するため、勾配消失を防ぐスキップ接続、GELU活性化関数、BatchNormを採用。
-- **Rigorous Validation**: 10-fold Cross-Validationを50回反復し、統計的有意差（Paired t-test）を検証。
-- **W&B Integration**: Weights & Biasesによるリアルタイムな学習ログの監視と、ハイパーパラメータのトレーサビリティを確保。
+- Gated Parallel Architecture: 線形パスと非線形パス（ResNet）を並列に配置。学習可能な Gate Parameter により、非線形シグナルの寄与度を自動調整し、ベースラインの精度崩壊を防ぎます。
+
+- Bottleneck ResNet: 高次元なSNPデータ（4,000+）に対応するため、中間層を一度圧縮するボトルネック構造を採用し、過学習を抑制しながら高次相互作用を抽出。
+
+- Within-Family Standardization: 16家系の環境差を排除するため、家系内標準化による前処理を実装。純粋な遺伝的変異の予測精度を向上。
+
+- W&B Integration: Weights & Biases を活用し、各Foldにおける gate_contribution（ゲートの開き具合）と精度向上（acc_diff）の相関をリアルタイム監視。
 
 ## プロジェクト構成
 
 ```text
 genomic-prediction-resnet-hybrid/
 ├── data/               # SoyNAM公開表現型・遺伝型データ
-│   ├── NAM03/          # High yield in drought
-│   ├── NAM24/          # High yielding
-│   └── NAM40/          # Diverse ancestry
-├── processed_data/     # preprocess.py によって生成される統合済み行列
-├── preprocess.py       # 複数家系の統合・数値化・メモリ最適化スクリプト
-├── train.py            # Hybrid ResNet の学習・検証スクリプト
+├── processed_data_hy/  # preprocess.py によって生成される家系内標準化済みデータ (.npy, .csv)
+├── model.py            # GatedGenomicResNet のアーキテクチャ定義
+├── main.py             # 並列最適化による学習・検証スクリプト
+├── preprocess.py       # 家系統合・標準化・メモリ最適化スクリプト
 ├── environment.yml     # Conda環境再現用ファイル
 └── LICENSE             # MIT License
 ```
@@ -93,9 +94,9 @@ python main.py
 ```
 
 # 今後の展望
-- W&B Sweepの活用: ベイズ最適化を用いたハイパーパラメータの自動探索（Learning Rate, Weight Decay, ネットワーク構造）。
-- Attention Mechanism: 特定のSNP間の高次相互作用を抽出するアーキテクチャへの拡張。
-- データ拡張: モデルの汎化性能を高めるための正則化手法の再検討。
+- Attention Mechanism: 特定のSNP間の高次相互作用を明示的に抽出するアーキテクチャへの拡張。
+
+- Monetization Analysis: 予測精度の向上が育種コストの削減に与える経済的インパクトの試算。
 
 # ライセンス
 - 本プロジェクトは MIT License の下で公開されています。
@@ -108,4 +109,3 @@ The dataset used in this study is from the SoyNAM project.
 Please download the following files from the official source:
 
 - Source URL: https://www.soybase.org/projects/SoyNAM/
-- Files required: genotype_data.csv, phenotype_data.csv (家系別に各ディレクトリへ配置)
