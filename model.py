@@ -14,37 +14,39 @@ class ResidualBlock(nn.Module):
         )
 
     def forward(self, x):
-        # 以前の残差接続を維持
         return x + self.block(x)
 
-class GenomicResNet(nn.Module):
+# クラス名を main.py のインポート名に合わせる
+class GatedGenomicResNet(nn.Module):
     def __init__(self, input_dim, hidden_dim=256, num_blocks=3):
         super().__init__()
         
-        # --- Wideパス (線形モデル) ---
-        # 入力(SNPデータ)から直接出力へ。RR-BLUP的な役割を担います。
-        self.wide_linear = nn.Linear(input_dim, 1)
+        # 1. Wideパス (線形モデル: RR-BLUP的役割)
+        self.linear_path = nn.Linear(input_dim, 1)
 
-        # --- Deepパス (ResNet) ---
-        # 複雑な相互作用を学習します。
+        # 2. Deepパス (ResNet: 非線形相互作用の抽出)
         self.input_layer = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.GELU()
         )
+        # 複数の残差ブロックを重ねる
         self.res_blocks = nn.Sequential(
             *[ResidualBlock(hidden_dim) for _ in range(num_blocks)]
         )
-        self.output_layer = nn.Linear(hidden_dim, 1)
+        self.nonlinear_output = nn.Linear(hidden_dim, 1, bias=False)
+
+        # 3. 学習可能なゲート (非線形パスの寄与度を調整)
+        self.gate = nn.Parameter(torch.tensor([0.01]))
 
     def forward(self, x):
-        # 1. Wideパスの計算
-        wide_out = self.wide_linear(x)
+        # 線形出力
+        lin_out = self.linear_path(x)
         
-        # 2. Deepパスの計算
-        deep_out = self.input_layer(x)
-        deep_out = self.res_blocks(deep_out)
-        deep_out = self.output_layer(deep_out)
+        # 非線形出力
+        res_out = self.input_layer(x)
+        res_out = self.res_blocks(res_out)
+        nonlin_out = self.nonlinear_output(res_out)
         
-        # 3. 両方の出力を足し合わせる (ハイブリッド)
-        return wide_out + deep_out
+        # ゲートを適用して統合
+        return lin_out + (nonlin_out * torch.tanh(self.gate))

@@ -1,0 +1,12 @@
+🚀 データを読み込み中... (Path: ./processed_data_hy/)
+✅ 解析開始 | 有効個体数: 2180 | SNP数: 4312
+Fold 1 | Hybrid: 0.1029 | Linear Only: 0.0797 | Gate: 0.0349
+Fold 2 | Hybrid: -0.0688 | Linear Only: -0.0694 | Gate: 0.0344
+Fold 3 | Hybrid: 0.1890 | Linear Only: 0.1304 | Gate: 0.0340
+Fold 4 | Hybrid: 0.1353 | Linear Only: 0.0710 | Gate: 0.0355
+Fold 5 | Hybrid: 0.1969 | Linear Only: 0.1604 | Gate: 0.0339
+Fold 6 | Hybrid: 0.0914 | Linear Only: 0.1155 | Gate: 0.0347
+Fold 7 | Hybrid: 0.2432 | Linear Only: 0.1112 | Gate: 0.0358
+Fold 8 | Hybrid: 0.0976 | Linear Only: 0.0699 | Gate: 0.0335
+Fold 9 | Hybrid: 0.1578 | Linear Only: 0.1218 | Gate: 0.0340
+Fold 10 | Hybrid: 0.1353 | Linear Only: 0.1222 | Gate: 0.0350
