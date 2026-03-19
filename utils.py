@@ -1,51 +1,76 @@
-#utils.py
+# utils.py
 import pandas as pd
 import numpy as np
 import rpy2.robjects as robjects
 from rpy2.robjects import pandas2ri, numpy2ri
 from rpy2.robjects.packages import importr
-from rpy2.robjects import conversion # 追加
+from rpy2.robjects import conversion
 
-# --- ここから環境設定 ---
-# activate() の代わりに、一括で変換ルールを登録します
+# --- 環境設定 ---
 my_converter = robjects.default_converter + pandas2ri.converter + numpy2ri.converter
 conversion.set_conversion(my_converter)
 
+# Rパッケージ sommer のロード（インストール済み前提）
 sommer = importr('sommer')
-# --- 環境設定ここまで ---
 
 def load_genomic_data(pheno_path, geno_path):
+    # 1. 表現型データの読み込みと単位の修正
     df_pheno = pd.read_csv(pheno_path)
-    traits_map = {'Yld (bu/a)': 'Yield', 'Days to Mat': 'DaysToMat', 'Protein': 'Protein', '100 sdwt (g)': 'SeedWeight'}
-    target_cols = list(traits_map.keys())
     
-    for col in target_cols:
+    # 昨日の preprocess.py に合わせ、'Yld (kg/ha)' を使用
+    traits_map = {
+        'Yld (kg/ha)': 'Yield', 
+        'Days to Mat': 'DaysToMat', 
+        'Protein': 'Protein', 
+        '100 sdwt (g)': 'SeedWeight'
+    }
+    
+    # データが存在する列のみに絞り込む（不足している形質があってもエラーにしない）
+    available_traits = [c for c in traits_map.keys() if c in df_pheno.columns]
+    
+    for col in available_traits:
         df_pheno[col] = pd.to_numeric(df_pheno[col], errors='coerce')
     
-    df_pheno_mean = df_pheno.groupby('Corrected Strain')[target_cols].mean().reset_index()
-    df_pheno_mean = df_pheno_mean.dropna(subset=['Yld (bu/a)'])
+    # 系統ごとの平均値を計算（個体名：Corrected Strain）
+    df_pheno_mean = df_pheno.groupby('Corrected Strain')[available_traits].mean().reset_index()
+    # 収量データがない行は削除
+    df_pheno_mean = df_pheno_mean.dropna(subset=['Yld (kg/ha)'])
     
-    df_geno = pd.read_csv(geno_path)
-    mapping = {'A': 0, 'H': 1, 'B': 2, '-': np.nan, 'N': np.nan}
-    # T.copy() を入れて明示的にコピーを作成し、型エラーを防ぎます
-    geno_data = df_geno.iloc[:, 5:].replace(mapping).infer_objects(copy=False).T.copy()
+    # 2. 遺伝子データの読み込み
+    # すでに preprocess.py で転置・数値化済みの .pkl を読み込む場合を想定
+    if geno_path.endswith('.pkl'):
+        geno_data = pd.read_pickle(geno_path)
+    else:
+        # .csv の場合は従来の処理
+        df_geno = pd.read_csv(geno_path)
+        mapping = {'A': 0, 'H': 1, 'B': 2, '-': np.nan, 'N': np.nan}
+        geno_data = df_geno.iloc[:, 5:].replace(mapping).infer_objects(copy=False).T.copy()
+    
     geno_data.index.name = 'Corrected Strain'
+    # 欠損値を平均値で補完
     geno_data = geno_data.fillna(geno_data.mean())
     
+    # 3. データの結合（Inner Join）
     combined = pd.merge(df_pheno_mean, geno_data, on='Corrected Strain', how='inner')
-    y_multi = combined[target_cols].astype(np.float64).copy()
+    
+    # 戻り値の整理
+    y_multi = combined[available_traits].astype(np.float64).copy()
     y_multi.columns = [traits_map[c] for c in y_multi.columns]
-    X = combined.iloc[:, len(target_cols) + 1 :].values.astype(np.float32)
+    
+    # 遺伝子データ部分のみを抽出（形質列 + ID列 を飛ばす）
+    X = combined.iloc[:, len(available_traits) + 1 :].values.astype(np.float32)
+    
     return X, y_multi.fillna(y_multi.mean()), combined['Corrected Strain'].tolist()
 
 def calculate_gblup_residuals(X, y_df, train_idx, test_idx, strain_ids):
-    # numpyのデータをRに渡すために変換器を有効にした状態で処理
+    # データの標準化
     X_std = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-6)
-    # G行列計算
+    # G行列（血縁行列）の計算
     G = (np.dot(X_std, X_std.T) / X.shape[1]) + np.eye(len(X)) * 1e-5
     
     df_r = y_df.copy()
     df_r['id'] = strain_ids
+    # テストセットの収量を欠損（NaN）させて、GBLUPで予測させる
     df_r.loc[test_idx, 'Yield'] = np.nan 
 
     # Rのグローバル環境へデータを転送
@@ -53,29 +78,44 @@ def calculate_gblup_residuals(X, y_df, train_idx, test_idx, strain_ids):
     robjects.globalenv['G_mat'] = G
     robjects.globalenv['strain_ids_r'] = robjects.StrVector(strain_ids)
     
+    # sommer による多変量 GBLUP 解析
     r_script = """
-    library(sommer)
+   library(sommer)
     rownames(G_mat) <- strain_ids_r; colnames(G_mat) <- strain_ids_r
     
-    # sommerによる多変量GBLUP
-    ans_mt <- mmer(fixed = cbind(Yield, DaysToMat, Protein, SeedWeight) ~ 1,
-                   random = ~ vsr(id, Gu=G_mat, Gtc=unsm(4)), 
-                   rcov = ~ vsr(units, Gtc=diag(4)), data = df_r, verbose = FALSE)
+    # データをRのデータフレームとして確実に認識させる
+    dat <- as.data.frame(df_r)
+    dat$id <- as.character(strain_ids_r)
     
-    u_mt_mat <- ans_mt$U[[1]]; if(is.list(u_mt_mat)) u_mt_mat <- do.call(cbind, u_mt_mat)
-    u_mt_yield <- u_mt_mat[strain_ids_r, 1] 
-    res_mat <- as.matrix(ans_mt$residuals)
+    # 単変量 GBLUP 解析（Yieldのみに集中）
+    # 固定効果：1（切片）、変量効果：id（G行列を使用）
+    ans <- mmer(fixed = Yield ~ 1,
+                random = ~ vsr(id, Gu = G_mat), 
+                rcov = ~ vsr(units), 
+                data = dat, verbose = FALSE)
+    
+    # 予測値（BLUP）の抽出
+    u_blup <- ans$U[[1]]$Yield
+    if(is.null(u_blup)) {
+        # 構造が違う場合のフォールバック
+        u_blup <- as.matrix(ans$U[[1]])[,1]
+    }
+    
+    # 全個体分を strain_ids_r の順序で取得
+    u_mt_yield <- u_blup[strain_ids_r]
+    
+    # 残差の取得
+    res_val <- as.matrix(ans$residuals)
     full_res <- rep(0, length(strain_ids_r))
     
-    # 欠損値（test_idx）がある場合の残差補完
-    existing_idx <- as.numeric(rownames(res_mat))
-    full_res[existing_idx] <- as.numeric(res_mat[, 1])
+    # 残差が存在するインデックス（訓練データ）に値を代入
+    existing_idx <- as.numeric(rownames(res_val))
+    full_res[existing_idx] <- as.numeric(res_val[, 1])
     
     list(u_mt = u_mt_yield, res = full_res)
     """
     res = robjects.r(r_script)
 
-    # res.names に () をつけて呼び出すように修正します
     names = list(res.names()) 
     u_mt_idx = names.index('u_mt')
     res_idx = names.index('res')
