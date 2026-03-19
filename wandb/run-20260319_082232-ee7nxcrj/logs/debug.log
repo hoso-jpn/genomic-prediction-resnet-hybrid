@@ -1,0 +1,24 @@
+2026-03-19 08:22:32,986 INFO    MainThread:7667 [wandb_setup.py:_flush():81] Current SDK version is 0.25.1
+2026-03-19 08:22:32,986 INFO    MainThread:7667 [wandb_setup.py:_flush():81] Configure stats pid to 7667
+2026-03-19 08:22:32,986 INFO    MainThread:7667 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-03-19 08:22:32,987 INFO    MainThread:7667 [wandb_init.py:setup_run_log_directory():717] Logging user logs to /home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/wandb/run-20260319_082232-ee7nxcrj/logs/debug.log
+2026-03-19 08:22:32,987 INFO    MainThread:7667 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to /home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/wandb/run-20260319_082232-ee7nxcrj/logs/debug-internal.log
+2026-03-19 08:22:32,987 INFO    MainThread:7667 [wandb_init.py:init():844] calling init triggers
+2026-03-19 08:22:32,987 INFO    MainThread:7667 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'lr': 0.001, 'epochs': 100, 'batch_size': 32, 'dropout': 0.3, 'hidden_dim': 64, '_wandb': {}}
+2026-03-19 08:22:32,988 INFO    MainThread:7667 [wandb_init.py:init():892] starting backend
+2026-03-19 08:22:33,395 INFO    MainThread:7667 [wandb_init.py:init():895] sending inform_init request
+2026-03-19 08:22:33,414 INFO    MainThread:7667 [wandb_init.py:init():903] backend started and connected
+2026-03-19 08:22:33,497 INFO    MainThread:7667 [wandb_init.py:init():973] updated telemetry
+2026-03-19 08:22:33,514 INFO    MainThread:7667 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
+2026-03-19 08:22:34,728 INFO    MainThread:7667 [wandb_init.py:init():1042] starting run threads in backend
+2026-03-19 08:22:35,174 INFO    MainThread:7667 [wandb_run.py:_console_start():2524] atexit reg
+2026-03-19 08:22:35,174 INFO    MainThread:7667 [wandb_run.py:_redirect():2373] redirect: wrap_raw
+2026-03-19 08:22:35,175 INFO    MainThread:7667 [wandb_run.py:_redirect():2442] Wrapping output streams.
+2026-03-19 08:22:35,175 INFO    MainThread:7667 [wandb_run.py:_redirect():2465] Redirects installed.
+2026-03-19 08:22:35,183 INFO    MainThread:7667 [wandb_init.py:init():1082] run started, returning control to user process
+2026-03-19 08:25:50,599 INFO    MainThread:7667 [wandb_run.py:_finish():2291] finishing run hoso-with-ai-parsonal/soybean-resnet-hybrid/ee7nxcrj
+2026-03-19 08:25:50,606 INFO    MainThread:7667 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-03-19 08:25:50,608 INFO    MainThread:7667 [wandb_run.py:_restore():2472] restore
+2026-03-19 08:25:50,609 INFO    MainThread:7667 [wandb_run.py:_restore():2478] restore done
+2026-03-19 08:25:52,485 INFO    MainThread:7667 [wandb_run.py:_footer_sync_info():3868] logging synced files

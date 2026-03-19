@@ -1,0 +1,54 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            l7cinq1byf4gxni8mcx5ea69y6i29rcs:
+                codePath: train.py
+                codePathLocal: train.py
+                cpu_count: 2
+                cpu_count_logical: 4
+                disk:
+                    /:
+                        total: "249792131072"
+                        used: "37085245440"
+                email: hoso.with.ai@gmail.com
+                executable: /home/yusuke-hosokawa/miniconda3/envs/genome/bin/python
+                git:
+                    commit: a68caa5b0d5ae773df5af8acc39cb603b1351c2b
+                    remote: git@github.com:hoso-jpn/genomic-prediction-resnet-hybrid.git
+                host: folio-g1
+                memory:
+                    total: "8199802880"
+                os: Linux-6.17.0-19-generic-x86_64-with-glibc2.39
+                program: /home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/train.py
+                python: CPython 3.10.20
+                root: /home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid
+                startedAt: "2026-03-18T23:10:12.220953Z"
+                writerId: l7cinq1byf4gxni8mcx5ea69y6i29rcs
+        m: []
+        python_version: 3.10.20
+        t:
+            "1":
+                - 1
+                - 5
+                - 53
+            "2":
+                - 1
+                - 5
+                - 53
+            "3":
+                - 16
+            "4": 3.10.20
+            "5": 0.25.1
+            "12": 0.25.1
+            "13": linux-x86_64
+batch_size:
+    value: 32
+dropout:
+    value: 0.3
+epochs:
+    value: 100
+hidden_dim:
+    value: 64
+lr:
+    value: 0.001

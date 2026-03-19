@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/train.py", line 26, in <module>
+    y = df_y['Yld (kg/ha)'].values.astype(np.float32)
+ValueError: could not convert string to float: '.'
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/train.py", line 26, in <module>
+    y = df_y['Yld (kg/ha)'].values.astype(np.float32)
+ValueError: could not convert string to float: '.'

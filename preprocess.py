@@ -1,73 +1,77 @@
 import pandas as pd
 import numpy as np
+import glob
 import os
+import gc
 
-# 設定：ファイルパスのリスト
-families = [
-    {
-        "id": 3,
-        "geno": "data/NAM24/4J105-3-4_NAM03_4312_SNP_genotype_Wm82.a1.tsv",
-        "pheno": "data/NAM24/4J105-3-4_NAM03_phenotype_data.tsv"
-    },
-    {
-        "id": 24,
-        "geno": "data/NAM40/LG03-2979_NAM24_4312_SNP_genotype_Wm82.a1.tsv",
-        "pheno": "data/NAM40/LG03-2979_NAM24_phenotype_data.tsv"
-    },
-    {
-        "id": 40,
-        "geno": "data/NAM03/PI_398881_NAM40_4312_SNP_genotype_Wm82.a1.tsv",
-        "pheno": "data/NAM03/PI_398881_NAM40_phenotype_data.tsv"
-    }
-]
+def preprocess_to_numpy():
+    data_dir = './data'
+    pheno_files = sorted(glob.glob(os.path.join(data_dir, '*_phenotype_data.tsv.gz')))
+    geno_files = sorted(glob.glob(os.path.join(data_dir, '*_SNP_genotype_Wm82.a1.tsv.gz')))
 
-# SNPの置換マップ (A:0, H:1, B:2, 欠損:-1)
-# int8を使うことでメモリを節約します
-mapping = {'A': 0, 'H': 1, 'B': 2, '-': -1}
+    all_y_std = [] # 標準化後の表現型を格納
+    all_X_list = []
+    mapping = {'A': -1, 'B': 1, 'H': 0, 'A/A': -1, 'B/B': 1, 'A/B': 0}
 
-all_genotypes = []
-all_phenotypes = []
+    print(f"📊 {len(pheno_files)} 家族のデータを数値化・家族内標準化中...")
 
-print("データ統合プロセスを開始します...")
+    for p_file, g_file in zip(pheno_files, geno_files):
+        family_id = os.path.basename(p_file).split('_')[0]
+        
+        # 1. 表現型読み込み
+        y_df = pd.read_table(p_file, compression='gzip')
+        y_df['Yld (kg/ha)'] = pd.to_numeric(y_df['Yld (kg/ha)'], errors='coerce')
+        y_df = y_df.dropna(subset=['Yld (kg/ha)', 'Corrected Strain'])
+        y_df = y_df.drop_duplicates(subset='Corrected Strain')
+        
+        # 2. 遺伝型読み込み（転置）
+        X_df_raw = pd.read_table(g_file, compression='gzip', index_col=0).T
+        X_df_raw = X_df_raw[~X_df_raw.index.duplicated(keep='first')]
+        
+        # 3. 同期
+        common_strains = y_df['Corrected Strain'].isin(X_df_raw.index)
+        y_subset = y_df[common_strains].set_index('Corrected Strain')[['Yld (kg/ha)']]
+        X_subset_raw = X_df_raw.loc[y_subset.index]
+        
+        # 【重要】家族内標準化 (Z-score)
+        # 家族ごとの平均を0、分散を1に揃えることで環境ノイズを排除
+        y_values = y_subset['Yld (kg/ha)'].values
+        y_std = (y_values - np.mean(y_values)) / (np.std(y_values) + 1e-6)
+        y_subset['Yld (kg/ha)'] = y_std
+        
+        # 4. 数値変換 (int8)
+        X_numeric = np.zeros(X_subset_raw.shape, dtype=np.int8)
+        for i, col in enumerate(X_subset_raw.columns):
+            X_numeric[:, i] = X_subset_raw[col].map(mapping).fillna(0).values
+        
+        all_y_std.append(y_subset)
+        all_X_list.append(X_numeric)
+        
+        print(f" ✅ {family_id}: {len(y_subset)} 個体完了 (Mean: {np.mean(y_values):.1f})")
+        del X_df_raw, X_subset_raw
+        gc.collect()
 
-for fam in families:
-    print(f"--- Processing NAM {fam['id']} ---")
+    # 統合
+    final_y = pd.concat(all_y_std)
+    final_X_array = np.vstack(all_X_list)
+
+    # 5. 低分散SNPの除去（全員同じ値のSNPは予測に役立たないため除外）
+    variances = np.var(final_X_array, axis=0)
+    valid_snp_mask = variances > 1e-6
+    final_X_array = final_X_array[:, valid_snp_mask]
     
-    # 1. 表現型データの読み込み (収量 Yld を取得)
-    df_p = pd.read_csv(fam['pheno'], sep='\t')
-    # 必要な列だけ抽出し、家系IDを追加
-    df_p = df_p[['Corrected Strain', 'Yld (kg/ha)']].dropna()
-    df_p['Family_ID'] = fam['id']
+    # 最終保存
+    output_dir = 'processed_data_hy'
+    os.makedirs(output_dir, exist_ok=True)
+    final_y.to_csv(f'{output_dir}/y_phenotype_hy.csv')
+    np.save(f'{output_dir}/X_genotype_int8.npy', final_X_array)
     
-    # 2. ゲノムデータの読み込み
-    # SNPデータは「行=SNP, 列=個体」なので注意
-    df_g = pd.read_csv(fam['geno'], sep='\t')
+    print(f"\n✨ 前処理完了！")
+    print(f"合計個体数: {final_X_array.shape[0]} | 残ったSNP数: {final_X_array.shape[1]}")
     
-    # メタデータ列（dbSNP_ID等）を除外し、個体列のみにする
-    # snippetによると最初の6列程度がメタデータ
-    sample_cols = [c for c in df_g.columns if c.startswith('DS11') or c in ['Parent_IA3023', fam['geno'].split('_')[0]]]
-    
-    # 表現型データが存在する個体のみに絞り込む
-    common_samples = list(set(sample_cols) & set(df_p['Corrected Strain']))
-    df_p = df_p[df_p['Corrected Strain'].isin(common_samples)]
-    
-    # SNP行列を数値化して転置 (個体 x SNP)
-    # 非常にメモリを食う作業なので注意
-    geno_matrix = df_g.set_index('dbSNP_ID')[common_samples].replace(mapping).T
-    geno_matrix = geno_matrix.astype(np.int8)
-    
-    all_genotypes.append(geno_matrix)
-    all_phenotypes.append(df_p)
+    # 相関チェック（全SNPの中から最大相関を探す）
+    corrs = [np.corrcoef(final_X_array[:, i], final_y.iloc[:,0].values)[0,1] for i in range(min(500, final_X_array.shape[1]))]
+    print(f"最大相関サンプル(先頭500中): {max(corrs, key=abs):.4f}")
 
-# 3. 全家系を縦方向に結合
-print("全データをマージ中...")
-final_geno = pd.concat(all_genotypes, axis=0).fillna(-1).astype(np.int8)
-final_pheno = pd.concat(all_phenotypes, axis=0)
-
-# 4. 保存
-os.makedirs("processed_data", exist_ok=True)
-final_geno.to_pickle("processed_data/X_genotype.pkl") # 高速読み込み用
-final_pheno.to_csv("processed_data/y_phenotype.csv", index=False)
-
-print(f"完了！ 最終的な行列サイズ: {final_geno.shape}")
-print(f"ResNet入力用のSNP数: {final_geno.shape[1]}")
+if __name__ == "__main__":
+    preprocess_to_numpy()

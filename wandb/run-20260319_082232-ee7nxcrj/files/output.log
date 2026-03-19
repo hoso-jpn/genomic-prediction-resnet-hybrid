@@ -1,0 +1,14 @@
+警告: 行数が不一致です (X: 414, y: 5040)。Xのサイズに合わせてyを切り出します。
+同期完了。有効個体数: 414 / 元データ: 414
+学習を開始します...
+Epoch 0: Loss 559.6308
+Epoch 10: Loss 1.0867
+Epoch 20: Loss 1.0091
+Epoch 30: Loss 0.9433
+Epoch 40: Loss 0.8954
+Epoch 50: Loss 0.9383
+Epoch 60: Loss 0.8953
+Epoch 70: Loss 0.8950
+Epoch 80: Loss 0.8880
+Epoch 90: Loss 0.8459
+学習完了！

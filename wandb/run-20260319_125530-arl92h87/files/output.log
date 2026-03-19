@@ -1,0 +1,26 @@
+解析対象形質: Yld (kg/ha) | 有効個体数: 31167
+/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/sklearn/linear_model/_ridge.py:213: LinAlgWarning: Ill-conditioned matrix (rcond=7.65508e-09): result may not be accurate.
+  return linalg.solve(A, Xy, assume_a="pos", overwrite_a=True).T
+Repeat 1 Fold 1 | Hybrid: 0.0997 | Base: 0.1617
+/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/sklearn/linear_model/_ridge.py:213: LinAlgWarning: Ill-conditioned matrix (rcond=7.58554e-09): result may not be accurate.
+  return linalg.solve(A, Xy, assume_a="pos", overwrite_a=True).T
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 100, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 79, in main
+    for batch_X, batch_y in train_loader:
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 741, in __next__
+    data = self._next_data()
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 801, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 100, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 79, in main
+    for batch_X, batch_y in train_loader:
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 741, in __next__
+    data = self._next_data()
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 801, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+KeyboardInterrupt

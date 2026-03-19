@@ -1,0 +1,1 @@
+{"_timestamp":1.7738791749081447e+09,"train_loss":0.15794780850410461,"p_value":0.0018021064329271817,"mean_so_far/mt_gblup":0.7128181336316548,"_step":419,"repeat":20,"accuracy/mt_gblup":0.7240148613618448,"mean_so_far/hybrid":0.7128299813400911,"epoch":50,"_wandb":{"runtime":1692},"_runtime":1692,"accuracy/hybrid":0.7240211017982635}

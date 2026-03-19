@@ -1,108 +1,116 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 import wandb
 from sklearn.model_selection import KFold
 import numpy as np
-from scipy import stats
-from model import GenomicResNet
-from utils import load_genomic_data, calculate_gblup_residuals
+import pandas as pd
+import os
+import gc
 
-# 1. W&B初期化（設定を最適化）
-wandb.init(project="genomic-resnet-prediction", config={
-    "lr": 0.005,             # 0.0001から引き上げ
-    "weight_decay": 0.05,    # 正則化を少し調整
-    "epochs": 250,           # 残差学習のために少し延長
-    "repeats": 10,
-    "folds": 10,
-    "dropout_rate": 0.2      # 適合力を上げるため少し下げる
-})
+# 別ファイル model.py に GatedGenomicResNet を定義している前提
+from model import GatedGenomicResNet 
+
+# --- 設定：最新の最適化パラメータ ---
+config_dict = {
+    "lr": 0.0001,           # 同時学習のため、少し慎重な学習率
+    "batch_size": 64,       # 更新回数を増やして非線形シグナルを拾う
+    "epochs": 150,          
+    "l2_reg": 0.05,         # 過学習を防ぐためのWeight Decay
+    "folds": 10             
+}
 
 def main():
-    X, y_multi, strain_ids = load_genomic_data('processed_data/y_phenotype.csv', 'processed_data/X_genotype.pkl')
+    wandb.init(project="genomic-resnet-prediction-hy", config=config_dict)
     config = wandb.config
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    all_hybrid_acc = []
-    all_mt_gblup_acc = []
-
-    print(f"解析開始: {config.repeats}反復 x {config.folds}分割 CV")
-
-    for r in range(config.repeats):
-        kf = KFold(n_splits=config.folds, shuffle=True, random_state=42+r)
-        hybrid_fold_acc = []
-        mt_fold_acc = []
+    # ローカルのパス設定
+    PROCESSED_DATA_PATH = './processed_data_hy/' 
+    
+    print(f"🚀 データを読み込み中... (Path: {PROCESSED_DATA_PATH})")
+    
+    # 1. 表現型データの読み込み (preprocess.py の出力に合わせる)
+    y_df = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, 'y_phenotype_hy.csv'), index_col=0)
+    y_all = y_df['Yld (kg/ha)'].values.astype(np.float32).reshape(-1, 1)
+    
+    # 2. 遺伝型データの読み込み (.npy を想定。もし .pkl なら pd.read_pickle に変更)
+    # Colabでは .npy を使用していたため、こちらの方が高速です。
+    X_path = os.path.join(PROCESSED_DATA_PATH, 'X_genotype_int8.npy')
+    if os.path.exists(X_path):
+        X_all = np.load(X_path).astype(np.float32)
+    else:
+        # pickle 読み込み + 数値変換 (以前の形式)
+        print("🔢 遺伝型データを数値に変換中...")
+        X_raw = pd.read_pickle(os.path.join(PROCESSED_DATA_PATH, 'X_genotype_hy.pkl'))
+        mapping = {'A': 1, 'B': -1, 'H': 0, 'A/A': 1, 'B/B': -1, 'A/B': 0}
+        X_raw = X_raw.replace(mapping)
+        X_all = X_raw.apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float32)
+        del X_raw
+    
+    print(f"✅ 解析開始 | 有効個体数: {len(y_all)} | SNP数: {X_all.shape[1]}")
+    
+    kf = KFold(n_splits=config.folds, shuffle=True, random_state=42)
+    
+    for fold, (train_idx, test_idx) in enumerate(kf.split(X_all)):
+        # データの準備
+        train_x, test_x = torch.from_numpy(X_all[train_idx]), torch.from_numpy(X_all[test_idx])
+        train_y, test_y = torch.from_numpy(y_all[train_idx]), torch.from_numpy(y_all[test_idx])
         
-        for fold, (train_idx, test_idx) in enumerate(kf.split(X)):
-            # 1. GBLUP計算
-            u_mt, res_yield = calculate_gblup_residuals(X, y_multi, train_idx, test_idx, strain_ids)
-            y_true = y_multi.iloc[test_idx]['Yield'].values
-            
-            # --- MT-GBLUP単体の精度 ---
-            mt_acc = np.corrcoef(y_true, u_mt[test_idx])[0, 1]
-            mt_fold_acc.append(mt_acc)
-            
-            # --- 2. ResNet学習 (ここが重要) ---
-            # 残差を標準化 (平均0, 分散1) して学習しやすくする
-            res_train = res_yield[train_idx]
-            res_mean = res_train.mean()
-            res_std = res_train.std() + 1e-6
-            y_res_scaled = (res_train - res_mean) / res_std
-            
-            model = GenomicResNet(X.shape[1]).to(device)
-            optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-            criterion = nn.MSELoss()
-            
-            X_train_tensor = torch.tensor(X[train_idx], dtype=torch.float32).to(device)
-            y_res_tensor = torch.tensor(y_res_scaled.reshape(-1,1), dtype=torch.float32).to(device)
-            
-            model.train()
-            for epoch in range(config.epochs):
+        train_ds = TensorDataset(train_x, train_y)
+        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
+        
+        # モデル初期化
+        model = GatedGenomicResNet(X_all.shape[1]).to(device)
+        
+        # 線形・非線形を同時に最適化する AdamW
+        optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.l2_reg)
+        criterion = nn.MSELoss()
+        
+        # --- 学習フェーズ ---
+        model.train()
+        for epoch in range(config.epochs):
+            for batch_X, batch_y in train_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
                 optimizer.zero_grad()
-                outputs = model(X_train_tensor)
-                loss = criterion(outputs, y_res_tensor)
+                loss = criterion(model(batch_X), batch_y)
                 loss.backward()
                 optimizer.step()
-                
-                if epoch % 50 == 0:
-                    wandb.log({"train_loss": loss.item(), "repeat": r, "fold": fold})
-            
-            # --- 3. Hybrid 予測 (スケールを戻す) ---
-            model.eval()
-            with torch.no_grad():
-                X_test_tensor = torch.tensor(X[test_idx], dtype=torch.float32).to(device)
-                dl_res_pred_scaled = model(X_test_tensor).cpu().numpy().flatten()
-                # 標準化を逆算して元に戻す
-                dl_res_pred = (dl_res_pred_scaled * res_std) + res_mean
-            
-            hybrid_pred = u_mt[test_idx] + dl_res_pred
-            h_acc = np.corrcoef(y_true, hybrid_pred)[0, 1]
-            hybrid_fold_acc.append(h_acc)
-
-            # メモリ管理
-            del X_train_tensor, y_res_tensor, X_test_tensor, model
-            if device.type == 'cuda': torch.cuda.empty_cache()
-            
-        # リピートごとの集計
-        avg_h_acc = np.mean(hybrid_fold_acc)
-        avg_mt_acc = np.mean(mt_fold_acc)
-        all_hybrid_acc.append(avg_h_acc)
-        all_mt_gblup_acc.append(avg_mt_acc)
         
-        # 統計的有意差
-        t_stat, p_val = stats.ttest_rel(all_hybrid_acc, all_mt_gblup_acc) if len(all_hybrid_acc) > 1 else (0, 1)
+        # --- 評価フェーズ ---
+        model.eval()
+        with torch.no_grad():
+            X_test_t = test_x.to(device)
+            # 全体予測 (Hybrid)
+            y_pred = model(X_test_t).cpu().numpy().flatten()
+            # 線形パスのみの予測 (Base)
+            y_lin_only = model.linear_path(X_test_t).cpu().numpy().flatten()
+            
+            y_true = test_y.numpy().flatten()
         
+        # 相関係数の算出
+        h_acc = np.corrcoef(y_true, y_pred)[0, 1]
+        l_acc = np.corrcoef(y_true, y_lin_only)[0, 1]
+        
+        # ゲートの値 (相乗効果の寄与度)
+        gate_val = torch.tanh(model.gate).item()
+        
+        print(f"Fold {fold+1} | Hybrid: {h_acc:.4f} | Linear Only: {l_acc:.4f} | Gate: {gate_val:.4f}")
+        
+        # W&Bにログを送信
         wandb.log({
-            "repeat": r + 1,
-            "accuracy/hybrid": avg_h_acc,
-            "accuracy/mt_gblup": avg_mt_acc,
-            "p_value": p_val
+            "fold": fold + 1,
+            "accuracy/hybrid": h_acc,
+            "accuracy/linear": l_acc,
+            "gate_contribution": gate_val,
+            "improvement": h_acc - l_acc
         })
-        
-        print(f"Repeat {r+1}/{config.repeats} | Hybrid: {avg_h_acc:.4f} | GBLUP: {avg_mt_acc:.4f} | p-val: {p_val:.4f}")
 
-    print("\n--- 最終解析完了 ---")
-    print(f"Hybrid 平均: {np.mean(all_hybrid_acc):.4f} | GBLUP 平均: {np.mean(all_mt_gblup_acc):.4f}")
+        # メモリ解放
+        del model, optimizer, train_loader, train_ds
+        torch.cuda.empty_cache()
+        gc.collect()
 
 if __name__ == "__main__":
     main()

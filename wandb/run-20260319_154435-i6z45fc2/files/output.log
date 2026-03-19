@@ -1,0 +1,33 @@
+🚀 データを読み込み中...
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 110, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 34, in main
+    y_df = pd.read_csv(os.path.join(DRIVE_PATH, 'y_phenotype_hy.csv'))
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/common.py", line 873, in get_handle
+    handle = open(
+FileNotFoundError: [Errno 2] No such file or directory: '/content/drive/MyDrive/Colab/y_phenotype_hy.csv'
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 110, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 34, in main
+    y_df = pd.read_csv(os.path.join(DRIVE_PATH, 'y_phenotype_hy.csv'))
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/pandas/io/common.py", line 873, in get_handle
+    handle = open(
+FileNotFoundError: [Errno 2] No such file or directory: '/content/drive/MyDrive/Colab/y_phenotype_hy.csv'

@@ -1,0 +1,39 @@
+🚀 データを読み込み中... (Path: ./processed_data_hy/)
+🔢 遺伝型データを数値に変換中...
+✅ 解析開始 | 有効個体数: 24716 | SNP数: 4312
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 111, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 90, in main
+    optimizer.step()
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 526, in wrapper
+    out = func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 81, in _use_grad
+    ret = func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 248, in step
+    adam(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 151, in maybe_fallback
+    return func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 970, in adam
+    func(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 545, in _single_tensor_adam
+    denom = (exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 111, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 90, in main
+    optimizer.step()
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 526, in wrapper
+    out = func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 81, in _use_grad
+    ret = func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 248, in step
+    adam(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/optimizer.py", line 151, in maybe_fallback
+    return func(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 970, in adam
+    func(
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/optim/adam.py", line 545, in _single_tensor_adam
+    denom = (exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
+KeyboardInterrupt

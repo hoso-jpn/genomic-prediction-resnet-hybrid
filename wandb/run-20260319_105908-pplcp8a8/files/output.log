@@ -1,0 +1,150 @@
+解析開始: 20反復 x 10分割 CV
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 1/20 | Hybrid: 0.7091 | GBLUP: 0.7091 | p-val: 1.0000
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 2/20 | Hybrid: 0.7076 | GBLUP: 0.7076 | p-val: 0.8855
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 3/20 | Hybrid: 0.7055 | GBLUP: 0.7055 | p-val: 0.5281
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 4/20 | Hybrid: 0.7178 | GBLUP: 0.7178 | p-val: 0.3684
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 5/20 | Hybrid: 0.7199 | GBLUP: 0.7199 | p-val: 0.2978
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Repeat 6/20 | Hybrid: 0.7224 | GBLUP: 0.7224 | p-val: 0.3719
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Adding additional levels of Gu in the model matrix of 'id'
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 108, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 62, in main
+    outputs = model(X_train_tensor)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/model.py", line 46, in forward
+    deep_out = self.res_blocks(deep_out)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/container.py", line 253, in forward
+    input = module(input)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/model.py", line 18, in forward
+    return x + self.block(x)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/container.py", line 253, in forward
+    input = module(input)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/dropout.py", line 73, in forward
+    return F.dropout(input, self.p, self.training, self.inplace)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/functional.py", line 1441, in dropout
+    _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 108, in <module>
+    main()
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py", line 62, in main
+    outputs = model(X_train_tensor)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/model.py", line 46, in forward
+    deep_out = self.res_blocks(deep_out)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/container.py", line 253, in forward
+    input = module(input)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/model.py", line 18, in forward
+    return x + self.block(x)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/container.py", line 253, in forward
+    input = module(input)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/modules/dropout.py", line 73, in forward
+    return F.dropout(input, self.p, self.training, self.inplace)
+  File "/home/yusuke-hosokawa/miniconda3/envs/genome/lib/python3.10/site-packages/torch/nn/functional.py", line 1441, in dropout
+    _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
+KeyboardInterrupt

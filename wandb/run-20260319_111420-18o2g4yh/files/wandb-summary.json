@@ -1,0 +1,1 @@
+{"accuracy/mt_gblup":0.7178255564361126,"p_value":0.1631027169613613,"_step":233,"accuracy/hybrid":0.7178255564399169,"_timestamp":1.7738872368686707e+09,"train_loss":0.007304888218641281,"fold":5,"_runtime":777,"repeat":4,"_wandb":{"runtime":777}}

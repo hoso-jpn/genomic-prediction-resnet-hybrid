@@ -1,0 +1,28 @@
+{
+  "os": "Linux-6.17.0-19-generic-x86_64-with-glibc2.39",
+  "python": "CPython 3.10.20",
+  "startedAt": "2026-03-19T03:55:30.555900Z",
+  "program": "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid/main.py",
+  "codePath": "main.py",
+  "codePathLocal": "main.py",
+  "git": {
+    "remote": "git@github.com:hoso-jpn/genomic-prediction-resnet-hybrid.git",
+    "commit": "7bd023398145eaa6228f90a8cfc17ad6f32b05f5"
+  },
+  "email": "hoso.with.ai@gmail.com",
+  "root": "/home/yusuke-hosokawa/Documents/projects/genomic-prediction-resnet-hybrid",
+  "host": "folio-g1",
+  "executable": "/home/yusuke-hosokawa/miniconda3/envs/genome/bin/python",
+  "cpu_count": 2,
+  "cpu_count_logical": 4,
+  "disk": {
+    "/": {
+      "total": "249792131072",
+      "used": "37262622720"
+    }
+  },
+  "memory": {
+    "total": "8199802880"
+  },
+  "writerId": "t9ji9x4np3zypxaklgawzqarrlh0uqre"
+}

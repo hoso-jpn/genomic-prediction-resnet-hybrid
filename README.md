@@ -4,12 +4,25 @@ This is a personal research project focused on deep learning applications in gen
 ## 予測フローの概要
 
 ```mermaid
-graph LR
-    A[Genotype Data] --> B[MT-GBLUP]
-    B --> C[Linear Prediction]
-    B --> D[Residuals]
-    D --> E[ResNet]
-    E --> F[Non-linear Adjustment]
+graph TD
+    A[Genotype Data] --> B{Parallel Paths}
+    
+    subgraph "Linear Path (Additive Effect)"
+        B --> C[Linear Layer / Ridge]
+        C --> D[Linear Prediction]
+    end
+    
+    subgraph "Non-linear Path (Residual Learning)"
+        B --> E[ResNet / Bottleneck]
+        E --> F[Non-linear Patterns]
+        F --> G[Learnable Gate]
+    end
+    
+    D --> H[Final Prediction]
+    G --> H
+    
+    style G fill:#f9f,stroke:#333,stroke-width:2px
+    style H font-weight:bold
 ```
 
 従来のゲノミック予測の線形モデル（GBLUP）と深層学習（ResNet）を統合し、大豆（SoyNAM）のゲノムデータから収量予測を行うハイブリッド・フレームワークです。
