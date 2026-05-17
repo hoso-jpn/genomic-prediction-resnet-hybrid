@@ -8,15 +8,25 @@ services:
       - ./processed_data_hy:/workspace/processed_data_hy
     command: python3 preprocess.py
 
-  # 学習（GPU使用、WANDB_API_KEY を .env から注入）
+  # 学習（CPU モード）
   train:
     build: .
     volumes:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
       - ./wandb:/workspace/wandb
-    environment:
-      - WANDB_API_KEY
+    env_file: .env
+    command: python3 main.py
+
+  # 学習（GPU モード）: NVIDIA Container Toolkit が必要
+  # 使い方: docker compose run --rm train-gpu
+  train-gpu:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+      - ./wandb:/workspace/wandb
+    env_file: .env
     deploy:
       resources:
         reservations:
@@ -26,6 +36,27 @@ services:
               capabilities: [gpu]
     command: python3 main.py
 
+  # W&B Sweep エージェント
+  # 使い方:
+  #   1. スイープ登録: docker compose run --rm sweep-init
+  #      → 表示された SWEEP_ID を .env の SWEEP_ID に記載
+  #   2. エージェント起動: docker compose run --rm sweep-agent
+  sweep-init:
+    build: .
+    volumes:
+      - ./wandb:/workspace/wandb
+    env_file: .env
+    command: wandb sweep sweep_config.yaml
+
+  sweep-agent:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+      - ./wandb:/workspace/wandb
+    env_file: .env
+    command: sh -c "wandb agent --count 30 $$SWEEP_ID"
+
   # 対話的な開発・デバッグ用シェル
   dev:
     build: .
@@ -33,16 +64,8 @@ services:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
       - ./wandb:/workspace/wandb
-      - .:/workspace   # ソースコードをライブマウント（コード編集が即時反映）
-    environment:
-      - WANDB_API_KEY
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - .:/workspace
+    env_file: .env
     stdin_open: true
     tty: true
     command: bash

@@ -1,3 +1,5 @@
+.venv/
+wandb/
 processed_data_hy/
 processed_data/
 data/

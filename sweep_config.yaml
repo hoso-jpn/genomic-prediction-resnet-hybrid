@@ -1,0 +1,69 @@
+# W&B Sweep 設定 — GatedGenomicResNet ハイパーパラメータ探索
+#
+# 使い方:
+#   1. スイープを登録:  wandb sweep sweep_config.yaml
+#   2. エージェント起動: wandb agent <SWEEP_ID>  (--count 30 で最大30試行)
+#   3. 複数GPUで並列実行: 複数ターミナルで同じコマンドを実行するだけでOK
+#
+# 最適化対象: LOFO全フォールド平均 Pearson r (summary/mean_hybrid)
+
+program: main.py
+method: bayes   # Bayesian最適化: グリッドより少ない試行数で高精度探索
+
+metric:
+  name: summary/mean_hybrid
+  goal: maximize
+
+# Hyperband による早期打ち切り
+# 中間フォールドのaccuracy/hybridが低いrunを自動キャンセルして探索を加速
+early_terminate:
+  type: hyperband
+  min_iter: 4      # 最低4フォールド終了後に打ち切り判定
+  eta: 2           # 下位50%のrunを打ち切る
+
+parameters:
+
+  # ── アーキテクチャ ───────────────────────────────────────────
+  hidden_dim:
+    values: [128, 256, 512]
+    # 128: 軽量・汎化重視 / 256: 現状デフォルト / 512: 表現力重視
+
+  num_blocks:
+    values: [2, 3, 4]
+    # 深くするほど高次相互作用を捉えやすいが過学習リスク増
+
+  dropout_rate:
+    distribution: uniform
+    min: 0.2
+    max: 0.5
+    # ResidualBlock 内の Dropout 率
+
+  # ── 最適化 ───────────────────────────────────────────────────
+  lr:
+    distribution: log_uniform_values
+    min: 0.000005
+    max: 0.001
+    # ゲノムデータは収束が遅いため広めの範囲で探索
+
+  l2_reg:
+    distribution: log_uniform_values
+    min: 0.005
+    max: 0.2
+    # AdamW の weight_decay。p/n > 1 のため強めの正則化が有効な傾向
+
+  batch_size:
+    values: [32, 64]
+    # 128はファミリー内サンプル数(~125)に対して大きすぎるため除外
+
+  # ── 固定パラメータ（スイープ対象外） ────────────────────────
+  epochs:
+    value: 150
+
+  early_stopping_patience:
+    value: 40
+
+  folds:
+    value: 10
+
+  cv_strategy:
+    value: lofo

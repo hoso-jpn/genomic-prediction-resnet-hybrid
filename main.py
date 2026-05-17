@@ -23,7 +23,10 @@ config_dict = {
     "l2_reg": 0.05,
     "folds": 10,
     "cv_strategy": "lofo",
-    "early_stopping_patience": 20,
+    "early_stopping_patience": 40,
+    "hidden_dim": 256,
+    "num_blocks": 3,
+    "dropout_rate": 0.4,
 }
 
 
@@ -42,23 +45,37 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
     train_y = torch.from_numpy(y_all[train_idx])
     test_y  = torch.from_numpy(y_all[test_idx])
 
-    # Early stopping 用に訓練データの10%をバリデーションに分割
-    n_val = max(1, int(len(train_idx) * 0.1))
-    val_x, val_y   = train_x[-n_val:].to(device), train_y[-n_val:].to(device)
-    train_x_fit    = train_x[:-n_val]
-    train_y_fit    = train_y[:-n_val]
+    # Early stopping 用に訓練データの10%をランダムにバリデーションへ分割
+    # ※ 末尾固定切り出しはデータがファミリー順に並んでいるため偏りが生じる
+    rng = np.random.default_rng(seed=fold)
+    n_total = len(train_idx)
+    n_val = max(1, int(n_total * 0.1))
+    val_mask = np.zeros(n_total, dtype=bool)
+    val_mask[rng.choice(n_total, n_val, replace=False)] = True
+
+    val_x  = train_x[val_mask].to(device)
+    val_y  = train_y[val_mask].to(device)
+    train_x_fit = train_x[~val_mask]
+    train_y_fit = train_y[~val_mask]
 
     train_ds = TensorDataset(train_x_fit, train_y_fit)
     train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
 
-    model = GatedGenomicResNet(X_all.shape[1]).to(device)
+    model = GatedGenomicResNet(
+        X_all.shape[1],
+        hidden_dim=config.hidden_dim,
+        num_blocks=config.num_blocks,
+        dropout_rate=config.dropout_rate,
+    ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.l2_reg)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
     criterion = nn.MSELoss()
 
-    best_val_loss = float('inf')
+    best_val_corr = -float('inf')
     best_state    = None
     patience_count = 0
+
+    val_y_np = val_y.cpu().numpy().flatten()
 
     for epoch in range(config.epochs):
         model.train()
@@ -70,12 +87,15 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
             optimizer.step()
         scheduler.step()
 
-        # Early stopping チェック
+        # Early stopping: 評価指標（Pearson r）と統一
         model.eval()
         with torch.no_grad():
-            val_loss = criterion(model(val_x), val_y).item()
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+            val_pred_np = model(val_x).cpu().numpy().flatten()
+        val_corr = np.corrcoef(val_y_np, val_pred_np)[0, 1]
+        if np.isnan(val_corr):
+            val_corr = -1.0
+        if val_corr > best_val_corr:
+            best_val_corr = val_corr
             best_state = copy.deepcopy(model.state_dict())
             patience_count = 0
         else:
