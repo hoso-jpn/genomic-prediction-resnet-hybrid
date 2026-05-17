@@ -1,0 +1,48 @@
+services:
+
+  # 生データ → processed_data_hy/ に変換
+  preprocess:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+    command: python3 preprocess.py
+
+  # 学習（GPU使用、WANDB_API_KEY を .env から注入）
+  train:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+      - ./wandb:/workspace/wandb
+    environment:
+      - WANDB_API_KEY
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: python3 main.py
+
+  # 対話的な開発・デバッグ用シェル
+  dev:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+      - ./wandb:/workspace/wandb
+      - .:/workspace   # ソースコードをライブマウント（コード編集が即時反映）
+    environment:
+      - WANDB_API_KEY
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: bash

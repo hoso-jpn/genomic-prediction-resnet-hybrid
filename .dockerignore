@@ -1,0 +1,13 @@
+data/
+processed_data_hy/
+wandb/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.vscode/
+*.npy
+*.csv
+*.gz
+*.tsv
+*.pkl

@@ -9,8 +9,9 @@ def preprocess_to_numpy():
     pheno_files = sorted(glob.glob(os.path.join(data_dir, '*_phenotype_data.tsv.gz')))
     geno_files = sorted(glob.glob(os.path.join(data_dir, '*_SNP_genotype_Wm82.a1.tsv.gz')))
 
-    all_y_std = [] # 標準化後の表現型を格納
+    all_y_std = []
     all_X_list = []
+    all_family_ids = []  # 個体ごとのファミリーID（CV用）
     mapping = {'A': -1, 'B': 1, 'H': 0, 'A/A': -1, 'B/B': 1, 'A/B': 0}
 
     print(f"📊 {len(pheno_files)} 家族のデータを数値化・家族内標準化中...")
@@ -46,6 +47,7 @@ def preprocess_to_numpy():
         
         all_y_std.append(y_subset)
         all_X_list.append(X_numeric)
+        all_family_ids.extend([family_id] * len(y_subset))
         
         print(f" ✅ {family_id}: {len(y_subset)} 個体完了 (Mean: {np.mean(y_values):.1f})")
         del X_df_raw, X_subset_raw
@@ -53,6 +55,7 @@ def preprocess_to_numpy():
 
     # 統合
     final_y = pd.concat(all_y_std)
+    final_y['family_id'] = all_family_ids
     final_X_array = np.vstack(all_X_list)
 
     # 5. 低分散SNPの除去（全員同じ値のSNPは予測に役立たないため除外）
