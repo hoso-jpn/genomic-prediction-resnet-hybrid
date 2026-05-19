@@ -12,10 +12,18 @@ import copy
 
 from model import GatedGenomicResNet
 
-# cv_strategy:
-#   "random"      : 従来のランダムKFold（ファミリー構造無視）
-#   "group_kfold" : ファミリー単位でグループ化したKFold
-#   "lofo"        : Leave-One-Family-Out（未知ファミリーへの真の汎化性評価）
+class CorrelationLoss(nn.Module):
+    """損失としてピアソン相関係数の負の値を計算する"""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, y_pred, y_true):
+        y_pred_c = y_pred - torch.mean(y_pred)
+        y_true_c = y_true - torch.mean(y_true)
+        pearson_num = torch.sum(y_pred_c * y_true_c)
+        pearson_den = torch.sqrt(torch.sum(y_pred_c**2)) * torch.sqrt(torch.sum(y_true_c**2))
+        return -pearson_num / (pearson_den + 1e-6)
+
 config_dict = {
     "lr": 0.0001,
     "batch_size": 64,
@@ -27,8 +35,9 @@ config_dict = {
     "hidden_dim": 256,
     "num_blocks": 3,
     "dropout_rate": 0.4,
+    "kernel_size": 7,
+    "pretrained_path": "./pretrained_models/dummy_cnn_weights.pt", # or None
 }
-
 
 def build_cv_splitter(strategy, n_folds):
     if strategy == "lofo":
@@ -38,22 +47,18 @@ def build_cv_splitter(strategy, n_folds):
     else:
         return KFold(n_splits=n_folds, shuffle=True, random_state=42)
 
-
 def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label=None):
     train_x = torch.from_numpy(X_all[train_idx])
     test_x  = torch.from_numpy(X_all[test_idx])
     train_y = torch.from_numpy(y_all[train_idx])
     test_y  = torch.from_numpy(y_all[test_idx])
 
-    # G行列固有ベクトルのスライス（G_pc が None のときは SNP をそのまま使う）
     if G_pc is not None:
         train_pc = torch.from_numpy(G_pc[train_idx])
         test_pc  = torch.from_numpy(G_pc[test_idx])
     else:
         train_pc = test_pc = None
 
-    # Early stopping 用に訓練データの10%をランダムにバリデーションへ分割
-    # ※ 末尾固定切り出しはデータがファミリー順に並んでいるため偏りが生じる
     rng = np.random.default_rng(seed=fold)
     n_total = len(train_idx)
     n_val = max(1, int(n_total * 0.1))
@@ -81,7 +86,13 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, fami
         num_blocks=config.num_blocks,
         dropout_rate=config.dropout_rate,
         pc_dim=pc_dim,
+        kernel_size=config.get('kernel_size', 7)
     ).to(device)
+
+    pretrained_path = config.get('pretrained_path')
+    if pretrained_path:
+        model.load_pretrained_cnn(pretrained_path)
+
     optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.l2_reg)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
     criterion = CorrelationLoss()
@@ -105,7 +116,6 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, fami
             optimizer.step()
         scheduler.step()
 
-        # Early stopping: 評価指標（Pearson r）と統一
         model.eval()
         with torch.no_grad():
             val_pred_np = model(val_x, val_pc).cpu().numpy().flatten()
@@ -140,11 +150,11 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, fami
     print(f"{label:20s} | Hybrid: {h_acc:.4f} | Linear: {l_acc:.4f} | Gate: {gate_val:.4f} | Stopped: ep{stopped_at}")
 
     log_dict = {
-        "fold":               fold + 1,
-        "accuracy/hybrid":    h_acc,
-        "accuracy/linear":    l_acc,
+        "fold": fold + 1,
+        "accuracy/hybrid": h_acc,
+        "accuracy/linear": l_acc,
         "gate_contribution":  gate_val,
-        "stopped_epoch":      stopped_at,
+        "stopped_epoch": stopped_at,
     }
     if family_label:
         log_dict["test_family"] = family_label
@@ -155,27 +165,22 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, fami
 
     return h_acc, l_acc, log_dict
 
-
 def main():
     wandb.init(project="genomic-resnet-prediction-hy", config=config_dict)
     config = wandb.config
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     PROCESSED_DATA_PATH = './processed_data_hy/'
-
     print(f"データを読み込み中... (Path: {PROCESSED_DATA_PATH})")
 
     y_df  = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, 'y_phenotype_hy.csv'), index_col=0)
     y_all = y_df['Yld (kg/ha)'].values.astype(np.float32).reshape(-1, 1)
     X_all = np.load(os.path.join(PROCESSED_DATA_PATH, 'X_genotype_int8.npy')).astype(np.float32)
 
-    # ファミリーIDの読み込み
     if 'family_id' in y_df.columns:
         family_ids = y_df['family_id'].values
     else:
-        # 再前処理前の旧データ互換: family_id列がない場合はランダムCVにフォールバック
         print("警告: family_id列が見つかりません。cv_strategy を 'random' に変更します。")
-        print("      preprocess.py を再実行して processed_data_hy/ を更新してください。")
         family_ids = None
         if config.cv_strategy != "random":
             wandb.config.update({"cv_strategy": "random"}, allow_val_change=True)
@@ -184,21 +189,20 @@ def main():
     splitter  = build_cv_splitter(strategy, config.folds)
 
     n_families = len(np.unique(family_ids)) if family_ids is not None else "N/A"
-    # G行列固有ベクトルの読み込み（preprocess.py で生成）
     G_pc_path = os.path.join(PROCESSED_DATA_PATH, 'G_eigenvec.npy')
     if os.path.exists(G_pc_path):
         G_pc = np.load(G_pc_path)
-        print(f"G固有ベクトル読み込み完了 (shape: {G_pc.shape}) → 線形パスを GBLUP 近似モードで実行")
+        print(f"G固有ベクトル読み込み完了 (shape: {G_pc.shape})")
     else:
         G_pc = None
         print("G_eigenvec.npy が未生成のため、線形パスに生SNPを使用します。")
-        print("  → docker compose run --rm preprocess を実行すると G 固有ベクトルが生成されます。")
 
-    print(f"解析開始 | 個体数: {len(y_all)} | SNP数: {X_all.shape[1]} | "
-          f"ファミリー数: {n_families} | CV戦略: {strategy}")
+    print((
+        f"解析開始 | 個体数: {len(y_all)} | SNP数: {X_all.shape[1]} | "
+        f"ファミリー数: {n_families} | CV戦略: {strategy}"
+    ))
 
     all_h_acc, all_l_acc = [], []
-
     split_args = (X_all, y_all, family_ids) if strategy != "random" else (X_all,)
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(*split_args)):
@@ -215,28 +219,9 @@ def main():
 
     mean_h = np.mean(all_h_acc)
     mean_l = np.mean(all_l_acc)
-    print(f"\n{'='*55}")
+    print("\n" + "="*55)
     print(f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}")
-    wandb.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l,
-               "summary/improvement": mean_h - mean_l})
-
-
-if __name__ == "__main__":
-    main()
-fold(
-            fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label
-        )
-        wandb.log(log_dict)
-        all_h_acc.append(h_acc)
-        all_l_acc.append(l_acc)
-
-    mean_h = np.mean(all_h_acc)
-    mean_l = np.mean(all_l_acc)
-    print(f"\n{'='*55}")
-    print(f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}")
-    wandb.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l,
-               "summary/improvement": mean_h - mean_l})
-
+    wandb.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l, "summary/improvement": mean_h - mean_l})
 
 if __name__ == "__main__":
     main()
