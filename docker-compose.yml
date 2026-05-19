@@ -57,6 +57,18 @@ services:
     env_file: .env
     command: sh -c "wandb agent --count 30 $$SWEEP_ID"
 
+  # LOFO-CV GBLUP ベースライン（R/sommer 使用）
+  # 使い方: docker compose run --rm gblup-baseline
+  # 実行時間の目安: 60〜120 分
+  gblup-baseline:
+    build: .
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./processed_data_hy:/workspace/processed_data_hy
+      - ./wandb:/workspace/wandb
+    env_file: .env
+    command: python3 gblup_baseline.py
+
   # 対話的な開発・デバッグ用シェル
   dev:
     build: .

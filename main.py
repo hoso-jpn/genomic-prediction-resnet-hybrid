@@ -39,11 +39,18 @@ def build_cv_splitter(strategy, n_folds):
         return KFold(n_splits=n_folds, shuffle=True, random_state=42)
 
 
-def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_label=None):
+def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label=None):
     train_x = torch.from_numpy(X_all[train_idx])
     test_x  = torch.from_numpy(X_all[test_idx])
     train_y = torch.from_numpy(y_all[train_idx])
     test_y  = torch.from_numpy(y_all[test_idx])
+
+    # G行列固有ベクトルのスライス（G_pc が None のときは SNP をそのまま使う）
+    if G_pc is not None:
+        train_pc = torch.from_numpy(G_pc[train_idx])
+        test_pc  = torch.from_numpy(G_pc[test_idx])
+    else:
+        train_pc = test_pc = None
 
     # Early stopping 用に訓練データの10%をランダムにバリデーションへ分割
     # ※ 末尾固定切り出しはデータがファミリー順に並んでいるため偏りが生じる
@@ -55,42 +62,53 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
 
     val_x  = train_x[val_mask].to(device)
     val_y  = train_y[val_mask].to(device)
-    train_x_fit = train_x[~val_mask]
-    train_y_fit = train_y[~val_mask]
+    val_pc = train_pc[val_mask].to(device) if train_pc is not None else None
 
-    train_ds = TensorDataset(train_x_fit, train_y_fit)
+    train_x_fit  = train_x[~val_mask]
+    train_y_fit  = train_y[~val_mask]
+    train_pc_fit = train_pc[~val_mask] if train_pc is not None else None
+
+    if train_pc_fit is not None:
+        train_ds = TensorDataset(train_x_fit, train_y_fit, train_pc_fit)
+    else:
+        train_ds = TensorDataset(train_x_fit, train_y_fit)
     train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
 
+    pc_dim = G_pc.shape[1] if G_pc is not None else None
     model = GatedGenomicResNet(
         X_all.shape[1],
         hidden_dim=config.hidden_dim,
         num_blocks=config.num_blocks,
         dropout_rate=config.dropout_rate,
+        pc_dim=pc_dim,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.l2_reg)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
-    criterion = nn.MSELoss()
+    criterion = CorrelationLoss()
 
     best_val_corr = -float('inf')
     best_state    = None
     patience_count = 0
-
     val_y_np = val_y.cpu().numpy().flatten()
 
     for epoch in range(config.epochs):
         model.train()
-        for batch_X, batch_y in train_loader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+        for batch in train_loader:
+            if train_pc_fit is not None:
+                batch_X, batch_y, batch_pc = [t.to(device) for t in batch]
+                pred = model(batch_X, batch_pc)
+            else:
+                batch_X, batch_y = [t.to(device) for t in batch]
+                pred = model(batch_X)
             optimizer.zero_grad()
-            loss = criterion(model(batch_X), batch_y)
-            loss.backward()
+            criterion(pred, batch_y).backward()
             optimizer.step()
         scheduler.step()
 
         # Early stopping: 評価指標（Pearson r）と統一
         model.eval()
         with torch.no_grad():
-            val_pred_np = model(val_x).cpu().numpy().flatten()
+            val_pred_np = model(val_x, val_pc).cpu().numpy().flatten()
         val_corr = np.corrcoef(val_y_np, val_pred_np)[0, 1]
         if np.isnan(val_corr):
             val_corr = -1.0
@@ -107,15 +125,17 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
     model.eval()
     with torch.no_grad():
         X_test_t  = test_x.to(device)
-        y_pred     = model(X_test_t).cpu().numpy().flatten()
-        y_lin_only = model.linear_path(X_test_t).cpu().numpy().flatten()
+        pc_test_t = test_pc.to(device) if test_pc is not None else None
+        y_pred     = model(X_test_t, pc_test_t).cpu().numpy().flatten()
+        lin_in     = pc_test_t if pc_test_t is not None else X_test_t
+        y_lin_only = model.linear_path(lin_in).cpu().numpy().flatten()
         y_true     = test_y.numpy().flatten()
 
-    h_acc   = np.corrcoef(y_true, y_pred)[0, 1]
-    l_acc   = np.corrcoef(y_true, y_lin_only)[0, 1]
+    h_acc    = np.corrcoef(y_true, y_pred)[0, 1]
+    l_acc    = np.corrcoef(y_true, y_lin_only)[0, 1]
     gate_val = torch.tanh(model.gate).item()
 
-    label = family_label if family_label else f"Fold {fold + 1}"
+    label      = family_label if family_label else f"Fold {fold + 1}"
     stopped_at = epoch + 1
     print(f"{label:20s} | Hybrid: {h_acc:.4f} | Linear: {l_acc:.4f} | Gate: {gate_val:.4f} | Stopped: ep{stopped_at}")
 
@@ -164,6 +184,16 @@ def main():
     splitter  = build_cv_splitter(strategy, config.folds)
 
     n_families = len(np.unique(family_ids)) if family_ids is not None else "N/A"
+    # G行列固有ベクトルの読み込み（preprocess.py で生成）
+    G_pc_path = os.path.join(PROCESSED_DATA_PATH, 'G_eigenvec.npy')
+    if os.path.exists(G_pc_path):
+        G_pc = np.load(G_pc_path)
+        print(f"G固有ベクトル読み込み完了 (shape: {G_pc.shape}) → 線形パスを GBLUP 近似モードで実行")
+    else:
+        G_pc = None
+        print("G_eigenvec.npy が未生成のため、線形パスに生SNPを使用します。")
+        print("  → docker compose run --rm preprocess を実行すると G 固有ベクトルが生成されます。")
+
     print(f"解析開始 | 個体数: {len(y_all)} | SNP数: {X_all.shape[1]} | "
           f"ファミリー数: {n_families} | CV戦略: {strategy}")
 
@@ -177,7 +207,24 @@ def main():
             family_label = str(np.unique(family_ids[test_idx])[0])
 
         h_acc, l_acc, log_dict = run_fold(
-            fold, train_idx, test_idx, X_all, y_all, config, device, family_label
+            fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label
+        )
+        wandb.log(log_dict)
+        all_h_acc.append(h_acc)
+        all_l_acc.append(l_acc)
+
+    mean_h = np.mean(all_h_acc)
+    mean_l = np.mean(all_l_acc)
+    print(f"\n{'='*55}")
+    print(f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}")
+    wandb.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l,
+               "summary/improvement": mean_h - mean_l})
+
+
+if __name__ == "__main__":
+    main()
+fold(
+            fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label
         )
         wandb.log(log_dict)
         all_h_acc.append(h_acc)

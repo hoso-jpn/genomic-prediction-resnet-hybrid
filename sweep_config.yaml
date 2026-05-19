@@ -8,6 +8,7 @@
 # 最適化対象: LOFO全フォールド平均 Pearson r (summary/mean_hybrid)
 
 program: main.py
+project: genomic-resnet-prediction-hy
 method: bayes   # Bayesian最適化: グリッドより少ない試行数で高精度探索
 
 metric:

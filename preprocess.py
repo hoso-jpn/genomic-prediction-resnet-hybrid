@@ -62,19 +62,59 @@ def preprocess_to_numpy():
     variances = np.var(final_X_array, axis=0)
     valid_snp_mask = variances > 1e-6
     final_X_array = final_X_array[:, valid_snp_mask]
+    print(f"低分散SNP除去後のSNP数: {final_X_array.shape[1]}")
+
+    # 6. MAF (Minor Allele Frequency) フィルタリング
+    print("\n🧬 MAFフィルタリングを実行中...")
+    # Allele 'B' (coded as 1) frequency. 'H' (0) is counted as 0.5 for both alleles.
+    p = (np.sum(final_X_array == 1, axis=0) + 0.5 * np.sum(final_X_array == 0, axis=0)) / final_X_array.shape[0]
+    maf = np.minimum(p, 1 - p)
+    maf_threshold = 0.05
+    maf_mask = maf > maf_threshold
+    final_X_array = final_X_array[:, maf_mask]
+    print(f"MAF > {maf_threshold} のSNP数: {final_X_array.shape[1]}")
+
+    # TODO: 連鎖不平衡(LD)プルーニングを実装する
+    # 高度に相関するSNPを除去することで、多重共線性を減らしモデルの安定性を向上させることができます。
+    # 一般的にはPLINKのような外部ツールが使われます (例: plink --bfile data --indep-pairwise 50 5 0.2)
     
     # 最終保存
     output_dir = 'processed_data_hy'
     os.makedirs(output_dir, exist_ok=True)
     final_y.to_csv(f'{output_dir}/y_phenotype_hy.csv')
     np.save(f'{output_dir}/X_genotype_int8.npy', final_X_array)
-    
+
     print(f"\n✨ 前処理完了！")
     print(f"合計個体数: {final_X_array.shape[0]} | 残ったSNP数: {final_X_array.shape[1]}")
-    
+
     # 相関チェック（全SNPの中から最大相関を探す）
     corrs = [np.corrcoef(final_X_array[:, i], final_y.iloc[:,0].values)[0,1] for i in range(min(500, final_X_array.shape[1]))]
     print(f"最大相関サンプル(先頭500中): {max(corrs, key=abs):.4f}")
+
+    # G行列（ゲノム関係行列）の固有値分解
+    # 固有ベクトルを線形パスの入力として使うことで GBLUP に近い線形予測を実現する
+    print("\nG行列（ゲノム関係行列）を計算・固有値分解中...")
+    X_f = final_X_array.astype(np.float64)
+    X_std = (X_f - X_f.mean(axis=0)) / (X_f.std(axis=0) + 1e-6)
+    G = (X_std @ X_std.T) / X_f.shape[1]
+    del X_f, X_std
+    gc.collect()
+
+    # eigh は対称行列専用で安定・高速（固有値は昇順）
+    eigenvalues, eigenvectors = np.linalg.eigh(G)
+    del G
+    order = np.argsort(eigenvalues)[::-1]          # 降順に並べ替え
+    eigenvalues  = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+
+    # 累積分散 90% をカバーする PC 数（上限 200）
+    cum_var = np.cumsum(eigenvalues) / np.sum(eigenvalues)
+    k = min(int(np.searchsorted(cum_var, 0.90)) + 1, 200)
+    print(f"選択 PC 数: {k}  (累積分散: {cum_var[k-1]:.3f})")
+
+    G_pc = eigenvectors[:, :k].astype(np.float32)
+    np.save(f'{output_dir}/G_eigenvec.npy', G_pc)
+    print(f"G_eigenvec.npy 保存完了 (shape: {G_pc.shape})")
 
 if __name__ == "__main__":
     preprocess_to_numpy()
