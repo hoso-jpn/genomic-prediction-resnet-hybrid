@@ -70,8 +70,7 @@ genomic-prediction-resnet-hybrid/
 ├── preprocess.py                  # 家系統合・標準化・SNPフィルタリング
 ├── create_dummy_graph_data.py     # グラフデータ（ダミー）生成スクリプト
 ├── create_dummy_pretrained_weights.py  # 事前学習済み重み（ダミー）生成スクリプト
-├── gblup_baseline.py              # GBLUP ベースライン
-├── utils.py                       # GBLUP ベースライン計算（R/sommer 使用）
+├── gblup_baseline.py              # GBLUP ベースライン（R/sommer 使用）
 ├── sweep_config.yaml              # W&B Sweep ハイパーパラメータ探索設定
 ├── Dockerfile                     # Python 3.11 + R 環境
 ├── docker-compose.yml             # 前処理・学習・Sweep 用サービス定義

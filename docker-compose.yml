@@ -12,6 +12,7 @@ services:
   train:
     build: .
     volumes:
+      - .:/workspace
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
       - ./wandb:/workspace/wandb
@@ -19,7 +20,6 @@ services:
     command: python3 main.py
 
   # 学習（GPU モード）: NVIDIA Container Toolkit が必要
-  # 使い方: docker compose run --rm train-gpu
   train-gpu:
     build: .
     volumes:
@@ -37,10 +37,6 @@ services:
     command: python3 main.py
 
   # W&B Sweep エージェント
-  # 使い方:
-  #   1. スイープ登録: docker compose run --rm sweep-init
-  #      → 表示された SWEEP_ID を .env の SWEEP_ID に記載
-  #   2. エージェント起動: docker compose run --rm sweep-agent
   sweep-init:
     build: .
     volumes:
@@ -57,9 +53,7 @@ services:
     env_file: .env
     command: sh -c "wandb agent --count 30 $$SWEEP_ID"
 
-  # LOFO-CV GBLUP ベースライン（R/sommer 使用）
-  # 使い方: docker compose run --rm gblup-baseline
-  # 実行時間の目安: 60〜120 分
+  # GBLUP ベースライン
   gblup-baseline:
     build: .
     volumes:
@@ -72,12 +66,36 @@ services:
   # 対話的な開発・デバッグ用シェル
   dev:
     build: .
+    security_opt:
+      - seccomp:unconfined
     volumes:
+      - .:/workspace
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
       - ./wandb:/workspace/wandb
-      - .:/workspace
     env_file: .env
     stdin_open: true
     tty: true
     command: bash
+
+  # 転移学習用の擬似的な重みを作成
+  create-weights:
+    build: .
+    volumes:
+      - .:/workspace
+    command: python3 create_dummy_pretrained_weights.py
+
+  # GNN用の擬似的なグラフデータを作成
+  create-graph-data:
+    build: .
+    volumes:
+      - .:/workspace
+    command: python3 create_dummy_graph_data.py
+
+  # GNNモデルの訓練
+  train-gnn:
+    build: .
+    volumes:
+      - .:/workspace
+    env_file: .env
+    command: python3 train_gnn.py

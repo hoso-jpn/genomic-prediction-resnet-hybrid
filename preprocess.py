@@ -91,30 +91,8 @@ def preprocess_to_numpy():
     corrs = [np.corrcoef(final_X_array[:, i], final_y.iloc[:,0].values)[0,1] for i in range(min(500, final_X_array.shape[1]))]
     print(f"最大相関サンプル(先頭500中): {max(corrs, key=abs):.4f}")
 
-    # G行列（ゲノム関係行列）の固有値分解
-    # 固有ベクトルを線形パスの入力として使うことで GBLUP に近い線形予測を実現する
-    print("\nG行列（ゲノム関係行列）を計算・固有値分解中...")
-    X_f = final_X_array.astype(np.float64)
-    X_std = (X_f - X_f.mean(axis=0)) / (X_f.std(axis=0) + 1e-6)
-    G = (X_std @ X_std.T) / X_f.shape[1]
-    del X_f, X_std
-    gc.collect()
-
-    # eigh は対称行列専用で安定・高速（固有値は昇順）
-    eigenvalues, eigenvectors = np.linalg.eigh(G)
-    del G
-    order = np.argsort(eigenvalues)[::-1]          # 降順に並べ替え
-    eigenvalues  = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]
-
-    # 累積分散 90% をカバーする PC 数（上限 200）
-    cum_var = np.cumsum(eigenvalues) / np.sum(eigenvalues)
-    k = min(int(np.searchsorted(cum_var, 0.90)) + 1, 200)
-    print(f"選択 PC 数: {k}  (累積分散: {cum_var[k-1]:.3f})")
-
-    G_pc = eigenvectors[:, :k].astype(np.float32)
-    np.save(f'{output_dir}/G_eigenvec.npy', G_pc)
-    print(f"G_eigenvec.npy 保存完了 (shape: {G_pc.shape})")
+    # 注: 線形パス用のゲノム主成分(PC)は、CVリークを防ぐため main.py の各fold内で
+    #     train個体のみから学習する（compute_fold_pcs）。ここでは全個体PCAを保存しない。
 
 if __name__ == "__main__":
     preprocess_to_numpy()

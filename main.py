@@ -21,8 +21,10 @@ class CorrelationLoss(nn.Module):
         y_pred_c = y_pred - torch.mean(y_pred)
         y_true_c = y_true - torch.mean(y_true)
         pearson_num = torch.sum(y_pred_c * y_true_c)
-        pearson_den = torch.sqrt(torch.sum(y_pred_c**2)) * torch.sqrt(torch.sum(y_true_c**2))
-        return -pearson_num / (pearson_den + 1e-6)
+        # sqrt(0) の勾配は inf になるため epsilon を内側に入れて数値安定化
+        pearson_den = (torch.sqrt(torch.sum(y_pred_c**2) + 1e-8)
+                       * torch.sqrt(torch.sum(y_true_c**2) + 1e-8))
+        return -pearson_num / (pearson_den + 1e-8)
 
 config_dict = {
     "lr": 0.0001,
@@ -36,8 +38,43 @@ config_dict = {
     "num_blocks": 3,
     "dropout_rate": 0.4,
     "kernel_size": 7,
-    "pretrained_path": "./pretrained_models/dummy_cnn_weights.pt", # or None
+    # 線形パスにゲノム主成分(PC)を使う。PCはリーク防止のため各fold内でtrainのみから学習する。
+    "use_pca": True,
+    "pca_var_target": 0.90,
+    "pca_max_components": 200,
+    # 事前学習済みCNN重みのパス。ダミー(ランダム)重みは予測に無益なためデフォルトは None。
+    # 実際に事前学習した重みがある場合のみパスを指定する。
+    "pretrained_path": None,
+    "seed": 42,
 }
+
+def set_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def compute_fold_pcs(X_train, X_test, var_target=0.90, max_components=200):
+    """SNP空間でPCAを学習し、train/testを主成分スコアに射影する。
+
+    リーク防止のため、標準化統計・主成分ローディングは **train のみ** から推定し、
+    同じ変換を test に適用する（GRM固有ベクトルを全個体で計算する旧方式のリークを排除）。
+    """
+    mean = X_train.mean(axis=0)
+    std = X_train.std(axis=0) + 1e-6
+    Xtr = (X_train - mean) / std
+    Xte = (X_test - mean) / std
+
+    # 経済的SVD: Xtr = U S Vt。Vt.T がSNP空間の主成分ローディング。
+    _, S, Vt = np.linalg.svd(Xtr, full_matrices=False)
+    explained = S ** 2
+    cum_var = np.cumsum(explained) / np.sum(explained)
+    k = min(int(np.searchsorted(cum_var, var_target)) + 1, max_components, Vt.shape[0])
+
+    V = Vt[:k].T  # (n_snp, k)
+    train_pc = (Xtr @ V).astype(np.float32)
+    test_pc = (Xte @ V).astype(np.float32)
+    return train_pc, test_pc
 
 def build_cv_splitter(strategy, n_folds):
     if strategy == "lofo":
@@ -47,15 +84,21 @@ def build_cv_splitter(strategy, n_folds):
     else:
         return KFold(n_splits=n_folds, shuffle=True, random_state=42)
 
-def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label=None):
+def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_label=None):
     train_x = torch.from_numpy(X_all[train_idx])
     test_x  = torch.from_numpy(X_all[test_idx])
     train_y = torch.from_numpy(y_all[train_idx])
     test_y  = torch.from_numpy(y_all[test_idx])
 
-    if G_pc is not None:
-        train_pc = torch.from_numpy(G_pc[train_idx])
-        test_pc  = torch.from_numpy(G_pc[test_idx])
+    if config.get('use_pca', True):
+        # PCはfold内のtrainのみから学習し、同じ変換をtestへ適用（リーク防止）
+        train_pc_np, test_pc_np = compute_fold_pcs(
+            X_all[train_idx], X_all[test_idx],
+            var_target=config.get('pca_var_target', 0.90),
+            max_components=config.get('pca_max_components', 200),
+        )
+        train_pc = torch.from_numpy(train_pc_np)
+        test_pc  = torch.from_numpy(test_pc_np)
     else:
         train_pc = test_pc = None
 
@@ -79,7 +122,7 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, fami
         train_ds = TensorDataset(train_x_fit, train_y_fit)
     train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
 
-    pc_dim = G_pc.shape[1] if G_pc is not None else None
+    pc_dim = train_pc.shape[1] if train_pc is not None else None
     model = GatedGenomicResNet(
         X_all.shape[1],
         hidden_dim=config.hidden_dim,
@@ -169,6 +212,7 @@ def main():
     wandb.init(project="genomic-resnet-prediction-hy", config=config_dict)
     config = wandb.config
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    set_seed(config.get('seed', 42))
 
     PROCESSED_DATA_PATH = './processed_data_hy/'
     print(f"データを読み込み中... (Path: {PROCESSED_DATA_PATH})")
@@ -189,17 +233,11 @@ def main():
     splitter  = build_cv_splitter(strategy, config.folds)
 
     n_families = len(np.unique(family_ids)) if family_ids is not None else "N/A"
-    G_pc_path = os.path.join(PROCESSED_DATA_PATH, 'G_eigenvec.npy')
-    if os.path.exists(G_pc_path):
-        G_pc = np.load(G_pc_path)
-        print(f"G固有ベクトル読み込み完了 (shape: {G_pc.shape})")
-    else:
-        G_pc = None
-        print("G_eigenvec.npy が未生成のため、線形パスに生SNPを使用します。")
+    pc_mode = "fold内PCA(train限定)" if config.get('use_pca', True) else "生SNP"
 
     print((
         f"解析開始 | 個体数: {len(y_all)} | SNP数: {X_all.shape[1]} | "
-        f"ファミリー数: {n_families} | CV戦略: {strategy}"
+        f"ファミリー数: {n_families} | CV戦略: {strategy} | 線形パス入力: {pc_mode}"
     ))
 
     all_h_acc, all_l_acc = [], []
@@ -211,7 +249,7 @@ def main():
             family_label = str(np.unique(family_ids[test_idx])[0])
 
         h_acc, l_acc, log_dict = run_fold(
-            fold, train_idx, test_idx, X_all, y_all, G_pc, config, device, family_label
+            fold, train_idx, test_idx, X_all, y_all, config, device, family_label
         )
         wandb.log(log_dict)
         all_h_acc.append(h_acc)
