@@ -1,0 +1,38 @@
+[project]
+name = "genomic-prediction-resnet-hybrid"
+version = "0.1.0"
+requires-python = "==3.11.*"
+dependencies = [
+    "numpy==1.26.4",
+    "pandas==3.0.3",
+    "scikit-learn==1.8.0",
+    "torch==2.2.1",
+    "torch-geometric==2.7.0",
+    "wandb==0.27.0",
+]
+
+[project.optional-dependencies]
+gblup = [
+    "scipy>=1.17.1",
+]
+soynam = [
+    "rpy2==3.5.17",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
