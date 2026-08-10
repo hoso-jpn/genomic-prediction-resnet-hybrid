@@ -1,139 +1,598 @@
+"""Leakage-safe LOFO-CV GBLUP baseline implemented with NumPy and SciPy.
+
+The model is y = 1 * mu + u + e, where u follows a genomic relationship
+matrix. Raw SoyNAM genotypes are loaded without replacing missing values.
+Marker filtering, mean imputation, and VanRaden relationship matrices are
+computed from the training families independently in every LOFO fold.
 """
-LOFO-CV GBLUP ベースライン (R/sommer)
 
-実行方法:
-  docker compose run --rm gblup-baseline
+from __future__ import annotations
 
-実行時間の目安:
-  G行列転送: 数秒
-  sommer::mmer × 16フォールド: 30〜120分（サンプル数に依存）
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-R/sommer の mmer は:
-  - 訓練個体の表現型から分散成分 σ²_g, σ²_e を REML 推定
-  - G行列の共分散構造を使ってテスト個体の BLUP を予測
-これは農業分野の標準的なゲノムセレクション手法 (GBLUP) と等価。
-"""
 import numpy as np
 import pandas as pd
-import os
-import wandb
+from numpy.typing import NDArray
+from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
-import rpy2.robjects as robjects
-from rpy2.robjects import pandas2ri, numpy2ri, conversion
-from rpy2.robjects.packages import importr
+FloatArray = NDArray[np.float64]
+BoolArray = NDArray[np.bool_]
+IndexArray = NDArray[np.int_]
 
-_converter = robjects.default_converter + pandas2ri.converter + numpy2ri.converter
-conversion.set_conversion(_converter)
-importr('sommer')
+PHENOTYPE_SUFFIX = "_phenotype_data.tsv.gz"
+GENOTYPE_SUFFIX = "_SNP_genotype_Wm82.a1.tsv.gz"
+PHENOTYPE_COLUMN = "Yld (kg/ha)"
+SAMPLE_COLUMN = "Corrected Strain"
+GENOTYPE_ENCODING = {
+    "A": -1.0,
+    "A/A": -1.0,
+    "H": 0.0,
+    "A/B": 0.0,
+    "B": 1.0,
+    "B/B": 1.0,
+}
 
-
-def compute_G(X):
-    X_f = X.astype(np.float64)
-    X_std = (X_f - X_f.mean(axis=0)) / (X_f.std(axis=0) + 1e-6)
-    G = (X_std @ X_std.T) / X_f.shape[1]
-    np.fill_diagonal(G, np.diag(G) + 1e-4)
-    return G
-
-
-def setup_r_globals(G, n, ids):
-    """G行列とIDをR環境に一度だけ転送し、dat_base データフレームを作成する"""
-    ids_r = robjects.StrVector(ids)
-    G_r = robjects.r['matrix'](
-        robjects.FloatVector(G.flatten().tolist()),
-        nrow=n, ncol=n
-    )
-    robjects.globalenv['G_mat'] = G_r
-    robjects.globalenv['ids_r'] = ids_r
-    robjects.r("""
-    library(sommer)
-    rownames(G_mat) <- ids_r
-    colnames(G_mat) <- ids_r
-    dat_base <- data.frame(
-        id    = factor(ids_r, levels = ids_r),
-        yield = rep(NA_real_, length(ids_r))
-    )
-    """)
+DIAGONAL_JITTER = 1e-4
+LOG_LAMBDA_BOUNDS = (-12.0, 12.0)
+MIN_TRAINING_SAMPLES = 3
+MIN_OBSERVED_RATE = 0.10
+MAF_THRESHOLD = 0.05
+VARIANCE_THRESHOLD = 1e-6
+EXPECTED_FAMILY_COUNT = 16
 
 
-def run_gblup_fold(fold_idx, test_idx, y_all, family_label):
-    y_masked = y_all.flatten().astype(np.float64).copy()
-    y_masked[test_idx] = np.nan
-    robjects.globalenv['y_vec'] = robjects.FloatVector(y_masked.tolist())
+@dataclass(frozen=True)
+class GblupDataset:
+    """Raw aligned SoyNAM records used by the GBLUP baseline."""
 
-    blup_vec = np.array(robjects.r("""
-    dat_base$yield <- y_vec
-    ans <- tryCatch(
-        mmer(
-            fixed  = yield ~ 1,
-            random = ~ vsr(id, Gu = G_mat),
-            rcov   = ~ vsr(units),
-            data   = dat_base,
-            verbose = FALSE
-        ),
-        error = function(e) { message("[sommer error] ", conditionMessage(e)); NULL }
-    )
-    if (is.null(ans)) {
-        rep(NA_real_, length(ids_r))
-    } else {
-        as.numeric(ans$U[[1]]$yield[ids_r])
+    genotypes: FloatArray
+    phenotypes: FloatArray
+    family_ids: NDArray[np.str_]
+    sample_names: NDArray[np.str_]
+    marker_names: NDArray[np.str_]
+
+
+@dataclass(frozen=True)
+class FoldRelationships:
+    """Training-derived marker statistics and relationship matrices."""
+
+    relationship_train: FloatArray
+    relationship_test_train: FloatArray
+    retained_markers: BoolArray
+    marker_means: FloatArray
+    observed_rates: FloatArray
+    denominator: float
+
+
+@dataclass(frozen=True)
+class GblupFit:
+    """Fitted parameters for the one-kernel GBLUP model."""
+
+    intercept: float
+    lambda_ratio: float
+    genetic_variance: float
+    residual_variance: float
+    dual_coefficients: FloatArray
+
+
+def _family_id_from_phenotype(path: Path) -> str:
+    if not path.name.endswith(PHENOTYPE_SUFFIX):
+        raise ValueError(f"unexpected phenotype filename: {path.name}")
+    return path.name.removesuffix(PHENOTYPE_SUFFIX)
+
+
+def _family_id_from_genotype(path: Path) -> str:
+    if not path.name.endswith(GENOTYPE_SUFFIX):
+        raise ValueError(f"unexpected genotype filename: {path.name}")
+    return path.name.removesuffix(GENOTYPE_SUFFIX).removesuffix("_4312")
+
+
+def _pair_family_files(data_dir: Path) -> list[tuple[str, Path, Path]]:
+    phenotype_files = {
+        _family_id_from_phenotype(path): path
+        for path in sorted(data_dir.glob(f"*{PHENOTYPE_SUFFIX}"))
     }
-    """))
+    genotype_files = {
+        _family_id_from_genotype(path): path
+        for path in sorted(data_dir.glob(f"*{GENOTYPE_SUFFIX}"))
+    }
 
-    y_true = y_all.flatten()[test_idx]
-    y_pred = blup_vec[test_idx]
-    valid  = ~np.isnan(y_pred)
+    if not phenotype_files:
+        raise FileNotFoundError(f"no phenotype files found in {data_dir}")
 
+    phenotype_families = set(phenotype_files)
+    genotype_families = set(genotype_files)
+    if phenotype_families != genotype_families:
+        missing_genotypes = sorted(phenotype_families - genotype_families)
+        missing_phenotypes = sorted(genotype_families - phenotype_families)
+        raise ValueError(
+            "phenotype/genotype family pairing is invalid: "
+            f"missing_genotypes={missing_genotypes}, "
+            f"missing_phenotypes={missing_phenotypes}"
+        )
+
+    return [
+        (family_id, phenotype_files[family_id], genotype_files[family_id])
+        for family_id in sorted(phenotype_families)
+    ]
+
+
+def _encode_genotypes(frame: pd.DataFrame, family_id: str) -> FloatArray:
+    normalized = frame.astype("string").apply(lambda column: column.str.strip())
+    missing = normalized.isna() | normalized.eq("-").fillna(False)
+    known = missing | normalized.isin(list(GENOTYPE_ENCODING))
+    unknown_mask = ~known.to_numpy(dtype=bool)
+
+    if unknown_mask.any():
+        raw_values = normalized.to_numpy(dtype=object)
+        unknown = sorted(
+            {str(value) for value in raw_values[unknown_mask] if pd.notna(value)}
+        )
+        raise ValueError(f"unknown genotype symbols in {family_id}: {unknown}")
+
+    encoded = np.full(normalized.shape, np.nan, dtype=np.float64)
+    for symbol, value in GENOTYPE_ENCODING.items():
+        symbol_mask = normalized.eq(symbol).fillna(False).to_numpy(dtype=bool)
+        encoded[symbol_mask] = value
+    return encoded
+
+
+def load_soynam_dataset(data_dir: str | Path = "data") -> GblupDataset:
+    """Load aligned RIL phenotypes and genotypes, excluding founder parents."""
+    data_path = Path(data_dir)
+    genotype_blocks: list[FloatArray] = []
+    phenotype_blocks: list[FloatArray] = []
+    family_labels: list[str] = []
+    sample_labels: list[str] = []
+    expected_markers: pd.Index | None = None
+
+    for family_id, phenotype_path, genotype_path in _pair_family_files(data_path):
+        phenotype = pd.read_table(phenotype_path, compression="gzip")
+        required_columns = {PHENOTYPE_COLUMN, SAMPLE_COLUMN}
+        missing_columns = required_columns - set(phenotype.columns)
+        if missing_columns:
+            raise ValueError(
+                f"missing phenotype columns in {phenotype_path.name}: "
+                f"{sorted(missing_columns)}"
+            )
+
+        phenotype[PHENOTYPE_COLUMN] = pd.to_numeric(
+            phenotype[PHENOTYPE_COLUMN], errors="coerce"
+        )
+        phenotype = (
+            phenotype.dropna(subset=[PHENOTYPE_COLUMN, SAMPLE_COLUMN])
+            .drop_duplicates(subset=SAMPLE_COLUMN)
+            .set_index(SAMPLE_COLUMN)
+        )
+
+        genotype = pd.read_table(genotype_path, compression="gzip", index_col=0).T
+        genotype = genotype[~genotype.index.duplicated(keep="first")]
+
+        if expected_markers is None:
+            expected_markers = genotype.columns.copy()
+        elif not expected_markers.equals(genotype.columns):
+            raise ValueError(f"marker order differs in {family_id}")
+
+        aligned_samples = phenotype.index[phenotype.index.isin(genotype.index)]
+        parent_name = family_id.split("_NAM", maxsplit=1)[0]
+        aligned_samples = aligned_samples[aligned_samples.astype(str) != parent_name]
+        if aligned_samples.empty:
+            raise ValueError(f"no RIL samples remain in {family_id}")
+
+        genotype_block = _encode_genotypes(genotype.loc[aligned_samples], family_id)
+        phenotype_block = phenotype.loc[aligned_samples, PHENOTYPE_COLUMN].to_numpy(
+            dtype=np.float64
+        )
+
+        genotype_blocks.append(genotype_block)
+        phenotype_blocks.append(phenotype_block)
+        family_labels.extend([family_id] * aligned_samples.size)
+        sample_labels.extend(aligned_samples.astype(str).tolist())
+
+    if expected_markers is None:
+        raise RuntimeError("marker metadata was not initialized")
+
+    genotypes = np.concatenate(genotype_blocks, axis=0)
+    phenotypes = np.concatenate(phenotype_blocks)
+    family_ids = np.asarray(family_labels, dtype=str)
+    sample_names = np.asarray(sample_labels, dtype=str)
+    marker_names = expected_markers.astype(str).to_numpy()
+
+    if genotypes.shape != (phenotypes.size, marker_names.size):
+        raise RuntimeError("aligned dataset dimensions are inconsistent")
+    if not np.isfinite(phenotypes).all():
+        raise ValueError("phenotypes must contain only finite values")
+
+    return GblupDataset(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        family_ids=family_ids,
+        sample_names=sample_names,
+        marker_names=marker_names,
+    )
+
+
+def prepare_fold_relationships(
+    genotypes_train: NDArray[Any],
+    genotypes_test: NDArray[Any],
+    *,
+    min_observed_rate: float = MIN_OBSERVED_RATE,
+    maf_threshold: float = MAF_THRESHOLD,
+) -> FoldRelationships:
+    """Build leakage-safe VanRaden matrices from training statistics only."""
+    train = np.asarray(genotypes_train, dtype=np.float64)
+    test = np.asarray(genotypes_test, dtype=np.float64)
+
+    if train.ndim != 2 or test.ndim != 2:
+        raise ValueError("genotypes must be two-dimensional arrays")
+    if train.shape[1] == 0 or train.shape[1] != test.shape[1]:
+        raise ValueError("training and test marker dimensions do not match")
+    if train.shape[0] < MIN_TRAINING_SAMPLES:
+        raise ValueError(
+            f"at least {MIN_TRAINING_SAMPLES} training samples are required"
+        )
+    if np.isinf(train).any() or np.isinf(test).any():
+        raise ValueError("genotypes must not contain infinite values")
+    if not 0.0 < min_observed_rate <= 1.0:
+        raise ValueError("min_observed_rate must be in (0, 1]")
+    if not 0.0 <= maf_threshold < 0.5:
+        raise ValueError("maf_threshold must be in [0, 0.5)")
+
+    observed_counts = np.isfinite(train).sum(axis=0)
+    observed_rates_all = observed_counts / train.shape[0]
+    observed_mask = observed_rates_all > min_observed_rate
+    if not observed_mask.any():
+        raise ValueError("no markers pass the training observed-rate filter")
+
+    candidate_train = train[:, observed_mask]
+    candidate_means = np.nanmean(candidate_train, axis=0)
+    imputed_candidate_train = np.where(
+        np.isnan(candidate_train), candidate_means, candidate_train
+    )
+    candidate_variances = np.var(imputed_candidate_train, axis=0)
+    allele_frequencies = (candidate_means + 1.0) / 2.0
+    candidate_maf = np.minimum(allele_frequencies, 1.0 - allele_frequencies)
+    candidate_keep = (
+        np.isfinite(candidate_means)
+        & (candidate_variances > VARIANCE_THRESHOLD)
+        & (candidate_maf > maf_threshold)
+    )
+    if not candidate_keep.any():
+        raise ValueError("no markers pass the training variance and MAF filters")
+
+    retained_markers = np.zeros(train.shape[1], dtype=bool)
+    retained_positions = np.flatnonzero(observed_mask)[candidate_keep]
+    retained_markers[retained_positions] = True
+
+    marker_means = candidate_means[candidate_keep]
+    observed_rates = observed_rates_all[retained_markers]
+    retained_train = train[:, retained_markers]
+    retained_test = test[:, retained_markers]
+    imputed_train = np.where(np.isnan(retained_train), marker_means, retained_train)
+    imputed_test = np.where(np.isnan(retained_test), marker_means, retained_test)
+    centered_train = imputed_train - marker_means
+    centered_test = imputed_test - marker_means
+
+    retained_frequencies = (marker_means + 1.0) / 2.0
+    denominator = float(
+        2.0 * np.sum(retained_frequencies * (1.0 - retained_frequencies))
+    )
+    if not np.isfinite(denominator) or denominator <= 0.0:
+        raise ValueError("VanRaden denominator must be positive")
+
+    relationship_train = centered_train @ centered_train.T / denominator
+    relationship_train.flat[:: relationship_train.shape[0] + 1] += DIAGONAL_JITTER
+    relationship_test_train = centered_test @ centered_train.T / denominator
+
+    return FoldRelationships(
+        relationship_train=relationship_train,
+        relationship_test_train=relationship_test_train,
+        retained_markers=retained_markers,
+        marker_means=marker_means,
+        observed_rates=observed_rates,
+        denominator=denominator,
+    )
+
+
+def _validate_training_data(
+    relationship_train: FloatArray,
+    phenotypes_train: FloatArray,
+) -> tuple[FloatArray, FloatArray]:
+    relationship = np.asarray(relationship_train, dtype=np.float64)
+    phenotypes = np.asarray(phenotypes_train, dtype=np.float64).reshape(-1)
+
+    if relationship.ndim != 2 or relationship.shape[0] != relationship.shape[1]:
+        raise ValueError("relationship_train must be a square matrix")
+    if relationship.shape[0] != phenotypes.size:
+        raise ValueError("relationship_train and phenotypes_train sizes do not match")
+    if phenotypes.size < MIN_TRAINING_SAMPLES:
+        raise ValueError(
+            f"at least {MIN_TRAINING_SAMPLES} training samples are required"
+        )
+    if not np.isfinite(relationship).all():
+        raise ValueError("relationship_train must contain only finite values")
+    if not np.isfinite(phenotypes).all():
+        raise ValueError("phenotypes_train must contain only finite values")
+    if not np.allclose(relationship, relationship.T, rtol=1e-8, atol=1e-10):
+        raise ValueError("relationship_train must be symmetric")
+    if np.ptp(phenotypes) <= np.finfo(np.float64).eps:
+        raise ValueError("training phenotypes must not be constant")
+
+    return relationship, phenotypes
+
+
+def _profile_reml_objective(
+    log_lambda: float,
+    eigenvalues: FloatArray,
+    rotated_phenotypes: FloatArray,
+    rotated_intercept: FloatArray,
+) -> float:
+    lambda_ratio = float(np.exp(log_lambda))
+    covariance_eigenvalues = eigenvalues + lambda_ratio
+    inverse_weights = 1.0 / covariance_eigenvalues
+    fixed_information = float(
+        np.sum(rotated_intercept * rotated_intercept * inverse_weights)
+    )
+    if fixed_information <= 0.0:
+        return float("inf")
+    intercept = float(
+        np.sum(rotated_intercept * rotated_phenotypes * inverse_weights)
+        / fixed_information
+    )
+    rotated_residuals = rotated_phenotypes - intercept * rotated_intercept
+    residual_quadratic = float(
+        np.sum(rotated_residuals * rotated_residuals * inverse_weights)
+    )
+    if residual_quadratic <= 0.0:
+        return float("inf")
+    residual_degrees_of_freedom = rotated_phenotypes.size - 1
+    return 0.5 * (
+        float(np.sum(np.log(covariance_eigenvalues)))
+        + np.log(fixed_information)
+        + residual_degrees_of_freedom
+        * np.log(residual_quadratic / residual_degrees_of_freedom)
+    )
+
+
+def fit_gblup_reml(
+    relationship_train: FloatArray,
+    phenotypes_train: FloatArray,
+) -> GblupFit:
+    """Fit one-kernel GBLUP variance components using profile REML."""
+    relationship, phenotypes = _validate_training_data(
+        relationship_train, phenotypes_train
+    )
+    eigenvalues, eigenvectors = np.linalg.eigh(relationship)
+    minimum_eigenvalue = float(eigenvalues.min())
+    if minimum_eigenvalue < -1e-8:
+        raise ValueError(
+            "relationship_train must be positive semidefinite; "
+            f"minimum eigenvalue was {minimum_eigenvalue:.3e}"
+        )
+    eigenvalues = np.maximum(eigenvalues, 0.0)
+    rotated_phenotypes = eigenvectors.T @ phenotypes
+    rotated_intercept = eigenvectors.T @ np.ones(phenotypes.size, dtype=np.float64)
+    optimization = minimize_scalar(
+        _profile_reml_objective,
+        args=(eigenvalues, rotated_phenotypes, rotated_intercept),
+        bounds=LOG_LAMBDA_BOUNDS,
+        method="bounded",
+        options={"xatol": 1e-8},
+    )
+    if not optimization.success or not np.isfinite(optimization.fun):
+        raise RuntimeError(f"REML optimization failed: {optimization.message}")
+
+    lambda_ratio = float(np.exp(optimization.x))
+    covariance_eigenvalues = eigenvalues + lambda_ratio
+    inverse_weights = 1.0 / covariance_eigenvalues
+    fixed_information = float(
+        np.sum(rotated_intercept * rotated_intercept * inverse_weights)
+    )
+    intercept = float(
+        np.sum(rotated_intercept * rotated_phenotypes * inverse_weights)
+        / fixed_information
+    )
+    rotated_residuals = rotated_phenotypes - intercept * rotated_intercept
+    residual_degrees_of_freedom = phenotypes.size - 1
+    residual_quadratic = float(
+        np.sum(rotated_residuals * rotated_residuals * inverse_weights)
+    )
+    genetic_variance = residual_quadratic / residual_degrees_of_freedom
+    residual_variance = lambda_ratio * genetic_variance
+    dual_coefficients = eigenvectors @ (rotated_residuals / covariance_eigenvalues)
+    return GblupFit(
+        intercept=intercept,
+        lambda_ratio=lambda_ratio,
+        genetic_variance=genetic_variance,
+        residual_variance=residual_variance,
+        dual_coefficients=dual_coefficients,
+    )
+
+
+def predict_genetic_values(
+    fit: GblupFit,
+    relationship_test_train: FloatArray,
+) -> FloatArray:
+    """Predict held-out breeding values from test-training covariance."""
+    cross_relationship = np.asarray(relationship_test_train, dtype=np.float64)
+    if cross_relationship.ndim != 2:
+        raise ValueError("relationship_test_train must be a two-dimensional array")
+    if cross_relationship.shape[1] != fit.dual_coefficients.size:
+        raise ValueError("relationship_test_train has an unexpected training dimension")
+    if not np.isfinite(cross_relationship).all():
+        raise ValueError("relationship_test_train must contain only finite values")
+    return cross_relationship @ fit.dual_coefficients
+
+
+def predict_gblup_fold(
+    train_indices: IndexArray,
+    test_indices: IndexArray,
+    genotypes: FloatArray,
+    phenotypes: FloatArray,
+) -> tuple[FloatArray, GblupFit, FoldRelationships]:
+    """Fit one leakage-safe LOFO split and predict held-out phenotypes."""
+    fold_relationships = prepare_fold_relationships(
+        genotypes[train_indices], genotypes[test_indices]
+    )
+    fit = fit_gblup_reml(
+        fold_relationships.relationship_train,
+        phenotypes[train_indices],
+    )
+    breeding_values = predict_genetic_values(
+        fit, fold_relationships.relationship_test_train
+    )
+    predictions = fit.intercept + breeding_values
+    return predictions, fit, fold_relationships
+
+
+def compute_pearson_correlation(
+    observed: FloatArray,
+    predicted: FloatArray,
+) -> float:
+    observed_values = np.asarray(observed, dtype=np.float64).reshape(-1)
+    predicted_values = np.asarray(predicted, dtype=np.float64).reshape(-1)
+    if observed_values.size != predicted_values.size:
+        raise ValueError("observed and predicted sizes do not match")
+    valid = np.isfinite(observed_values) & np.isfinite(predicted_values)
     if valid.sum() < 2:
-        r_val = float('nan')
-    else:
-        r_val = float(np.corrcoef(y_true[valid], y_pred[valid])[0, 1])
-        if np.isnan(r_val):
-            r_val = 0.0
+        return float("nan")
+    observed_valid = observed_values[valid]
+    predicted_valid = predicted_values[valid]
+    if (
+        np.ptp(observed_valid) <= np.finfo(np.float64).eps
+        or np.ptp(predicted_valid) <= np.finfo(np.float64).eps
+    ):
+        return 0.0
+    return float(np.corrcoef(observed_valid, predicted_valid)[0, 1])
 
-    label = family_label or f"Fold {fold_idx + 1}"
-    r_str = f"{r_val:.4f}" if not np.isnan(r_val) else "ERROR"
-    print(f"{label:20s} | GBLUP r: {r_str}")
-    return r_val, {"fold": fold_idx + 1, "gblup/r": r_val, "test_family": label}
+
+def compute_rmse(observed: FloatArray, predicted: FloatArray) -> float:
+    observed_values = np.asarray(observed, dtype=np.float64).reshape(-1)
+    predicted_values = np.asarray(predicted, dtype=np.float64).reshape(-1)
+    if observed_values.size != predicted_values.size:
+        raise ValueError("observed and predicted sizes do not match")
+    if (
+        not np.isfinite(observed_values).all()
+        or not np.isfinite(predicted_values).all()
+    ):
+        raise ValueError("RMSE inputs must contain only finite values")
+    return float(np.sqrt(np.mean((observed_values - predicted_values) ** 2)))
 
 
-def main():
+def main() -> None:
+    """Execute family-wise LOFO cross-validation."""
+    import wandb
+
+    dataset = load_soynam_dataset("data")
+    splitter = LeaveOneGroupOut()
+    total_folds = splitter.get_n_splits(
+        dataset.genotypes, dataset.phenotypes, dataset.family_ids
+    )
+    expected_folds = np.unique(dataset.family_ids).size
+    if total_folds != expected_folds:
+        raise RuntimeError("LOFO fold count does not match the family count")
+    if expected_folds != EXPECTED_FAMILY_COUNT:
+        raise RuntimeError(
+            f"expected {EXPECTED_FAMILY_COUNT} SoyNAM families, found {expected_folds}"
+        )
+
     wandb.init(
         project="genomic-resnet-prediction-hy",
         job_type="gblup_baseline",
-        name="gblup-lofo"
+        name="gblup-lofo-leakage-safe",
+        config={
+            "sample_count": dataset.phenotypes.size,
+            "marker_count": dataset.genotypes.shape[1],
+            "family_count": expected_folds,
+            "min_observed_rate": MIN_OBSERVED_RATE,
+            "maf_threshold": MAF_THRESHOLD,
+            "relationship": "VanRaden-1",
+            "phenotype_scale": "raw-kg-per-ha",
+        },
     )
 
-    PROCESSED = './processed_data_hy/'
-    y_df      = pd.read_csv(os.path.join(PROCESSED, 'y_phenotype_hy.csv'), index_col=0)
-    y_all     = y_df['Yld (kg/ha)'].values.astype(np.float32)
-    X_all     = np.load(os.path.join(PROCESSED, 'X_genotype_int8.npy')).astype(np.float32)
-    family_ids = y_df['family_id'].values
-    n          = len(y_all)
+    oof_predictions = np.full(dataset.phenotypes.size, np.nan, dtype=np.float64)
+    fold_correlations: list[float] = []
+    fold_count = 0
 
-    print(f"G行列を計算中 ({n}×{n}, {X_all.shape[1]} SNPs)...")
-    G   = compute_G(X_all)
-    ids = [f"g{i:04d}" for i in range(n)]
+    for fold_index, (train_indices, test_indices) in enumerate(
+        splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
+    ):
+        held_out_families = np.unique(dataset.family_ids[test_indices])
+        if held_out_families.size != 1:
+            raise RuntimeError("each LOFO fold must contain exactly one family")
+        family_label = str(held_out_families[0])
+        predictions, fit, relationships = predict_gblup_fold(
+            train_indices,
+            test_indices,
+            dataset.genotypes,
+            dataset.phenotypes,
+        )
+        oof_predictions[test_indices] = predictions
+        correlation = compute_pearson_correlation(
+            dataset.phenotypes[test_indices], predictions
+        )
+        rmse = compute_rmse(dataset.phenotypes[test_indices], predictions)
+        if not np.isfinite(correlation):
+            raise RuntimeError(f"non-finite correlation in {family_label}")
+        fold_correlations.append(correlation)
+        fold_count += 1
+        print(
+            f"{family_label:22s} r={correlation:.4f} rmse={rmse:.2f} "
+            f"markers={relationships.retained_markers.sum()}"
+        )
+        wandb.log(
+            {
+                "fold": fold_index + 1,
+                "gblup/r": correlation,
+                "gblup/rmse": rmse,
+                "gblup/lambda_ratio": fit.lambda_ratio,
+                "gblup/genetic_variance": fit.genetic_variance,
+                "gblup/residual_variance": fit.residual_variance,
+                "gblup/retained_markers": int(relationships.retained_markers.sum()),
+                "test_family": family_label,
+            }
+        )
 
-    print("R環境にG行列を転送中 (約38MB)...")
-    setup_r_globals(G, n, ids)
-    del G
-    print("転送完了。LOFO-CV 開始。\n")
+    if fold_count != total_folds or not np.isfinite(oof_predictions).all():
+        raise RuntimeError(
+            f"LOFO-CV incomplete: {fold_count}/{total_folds} folds succeeded"
+        )
 
-    splitter = LeaveOneGroupOut()
-    all_r    = []
+    macro_correlation = float(np.mean(fold_correlations))
+    pooled_correlation = compute_pearson_correlation(
+        dataset.phenotypes, oof_predictions
+    )
+    pooled_rmse = compute_rmse(dataset.phenotypes, oof_predictions)
 
-    for fold, (train_idx, test_idx) in enumerate(splitter.split(X_all, y_all, family_ids)):
-        family_label = str(np.unique(family_ids[test_idx])[0])
-        r_val, log_dict = run_gblup_fold(fold, test_idx, y_all, family_label)
-        wandb.log(log_dict)
-        if not np.isnan(r_val):
-            all_r.append(r_val)
+    output_dir = Path("gblup_results")
+    output_dir.mkdir(exist_ok=True)
+    pd.DataFrame(
+        {
+            "family_id": dataset.family_ids,
+            "sample_name": dataset.sample_names,
+            "observed_yield_kg_ha": dataset.phenotypes,
+            "predicted_yield_kg_ha": oof_predictions,
+        }
+    ).to_csv(output_dir / "oof_predictions.csv", index=False)
 
-    mean_r = float(np.mean(all_r)) if all_r else float('nan')
-    print(f"\n{'='*45}")
-    print(f"GBLUP LOFO 平均 r: {mean_r:.4f} ({len(all_r)}/{fold+1} フォールド成功)")
-    wandb.log({"summary/mean_gblup": mean_r})
+    print(f"\n{'=' * 58}")
+    print(f"GBLUP LOFO macro family r: {macro_correlation:.4f}")
+    print(f"GBLUP LOFO pooled OOF r:   {pooled_correlation:.4f}")
+    print(f"GBLUP LOFO pooled RMSE:    {pooled_rmse:.2f} kg/ha")
+    print(f"successful folds:          {fold_count}/{total_folds}")
+    wandb.log(
+        {
+            "summary/macro_family_r": macro_correlation,
+            "summary/pooled_oof_r": pooled_correlation,
+            "summary/pooled_oof_rmse": pooled_rmse,
+            "summary/successful_folds": fold_count,
+            "summary/total_folds": total_folds,
+        }
+    )
     wandb.finish()
 
 
