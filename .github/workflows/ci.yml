@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, unit tests, and CPU smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Synchronize dependencies
+        run: uv sync --frozen --extra gblup --dev
+
+      - name: Check formatting
+        run: >
+          uv run --frozen --extra gblup
+          ruff format --check
+          gblup_baseline.py
+          resnet_baseline.py
+          soynam_data.py
+          tests
+
+      - name: Run Ruff
+        run: >
+          uv run --frozen --extra gblup
+          ruff check
+          gblup_baseline.py
+          resnet_baseline.py
+          soynam_data.py
+          tests
+
+      - name: Run unit tests
+        run: >
+          uv run --frozen --extra gblup
+          pytest -q --ignore=tests/test_cpu_smoke.py
+
+      - name: Run CPU smoke test
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: >
+          uv run --frozen --extra gblup
+          pytest -q tests/test_cpu_smoke.py
