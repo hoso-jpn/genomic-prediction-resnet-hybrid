@@ -1,189 +1,186 @@
 # Genomic-Prediction-ResNet-Hybrid
 
-大豆（SoyNAM）のゲノムデータから収量を予測する深層学習フレームワーク。  
-線形モデル（Ridge/GBLUP）と ResNet を Gated Parallel Architecture で統合し、さらに遺伝子グラフ上のメッセージパッシングを行う GNN モデルを追加実装しました。
+[![CI](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/actions/workflows/ci.yml/badge.svg)](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/actions/workflows/ci.yml)
 
-## モデルアーキテクチャ
+SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量を予測し、未知の家系への外挿性能を評価する研究用リポジトリです。
 
-### 1. GatedGenomicResNet（`main.py`）
+現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweep、Docker経路はexperimentalまたは未検証として分離しています。
 
-線形パスと 1D CNN ResNet パスをゲート機構で統合するハイブリッドモデル。
+## 実装状況
 
-```mermaid
-graph TD
-    A[Genotype Data\n~4,300 SNPs] --> B{Parallel Paths}
+| 機能 | 状態 | 実装 |
+|---|---|---|
+| SoyNAM raw data loader | 検証済み | `soynam_data.py` |
+| GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
+| ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
+| 単体テスト・synthetic CPU smoke | CI実行 | `tests/`, `.github/workflows/ci.yml` |
+| 旧ResNet学習・W&B Sweep | experimental | `main.py`, `sweep_config.yaml` |
+| GNN | experimental | `train_gnn.py` |
+| Docker / Docker Compose | 未検証 | `Dockerfile`, `docker-compose.yml` |
 
-    subgraph "Linear Path  加法的遺伝効果"
-        B --> C[Linear Layer]
-        C --> D[Linear Prediction]
-    end
+「検証済み」は、入力整合性・split・前処理・出力契約とCPU上の実行経路を自動テストまたはスモークテストで確認したことを意味します。予測精度の優位性や大規模GPU実験の再現を保証するものではありません。
 
-    subgraph "Non-linear Path  エピスタシス抽出"
-        B --> E[Input Layer\ndim → hidden_dim]
-        E --> F[ConvResidualBlock × N\nBatchNorm + GELU + Dropout]
-        F --> G[Global Avg Pool]
-        G --> H[Learnable Gate\ntanh gate]
-    end
+## 評価設計
 
-    D --> I[Final Prediction\nlinear + gate × nonlinear]
-    H --> I
-```
+両ベースラインは、16家系のうち1家系をouter testとして保持するLOFO-CVを使用します。すべての個体は、held-out familyの予測として1回だけOOF（out-of-fold）出力へ現れます。
 
-**出力式**: `ŷ = W_lin·x + tanh(g) × ResNet(x)`
+### GBLUP
 
-- **Linear Path**: RR-BLUP 相当の加法的効果を学習
-- **ResNet Path**: 1D 畳み込み残差ブロックで高次元SNPを圧縮し非線形相互作用を抽出
-- **Gate Parameter**: 非線形パスの寄与度を適応的に制御。`tanh(g) → 0` のとき線形モデルに退縮
+`gblup_baseline.py`はNumPy/SciPyで実装した1-kernel GBLUPです。
 
-### 2. GraphGenomicNet（`train_gnn.py`）
+- training familyだけでmarker欠損率、MAF、平均imputation値を推定
+- training dataからVanRaden relationship matrixを構築
+- profile REMLで遺伝分散と残差分散の比を推定
+- held-out familyはtest-training relationshipから予測
 
-SNPを遺伝子グラフのノードに集約し、GCN（Graph Convolutional Network）でメッセージパッシングを行う GNN モデル。
+Rおよび`sommer`は、この検証済みGBLUP経路では使用しません。
 
-```mermaid
-graph TD
-    A[SNP Genotypes\nN×L] --> B[scatter_mean\nSNP → Gene Nodes]
-    C[Gene Graph\nEdge Index] --> D[GCNConv × num_layers\nGraph Convolution]
-    B --> D
-    D --> E[Global Mean Pooling]
-    E --> F[Linear\nhidden_dim → 1]
-    F --> G[Prediction]
-```
+### ResNet
 
-- **SNP→Gene 集約**: 各SNPを対応する遺伝子ノードへ `scatter_mean` で集約
-- **GCN**: 遺伝子ネットワーク上でノード特徴量を近傍伝播
-- **バッチ処理**: N 個体を一括処理するため edge_index をインデックスオフセットで拡張
+`resnet_baseline.py`は、PCAを入力する線形パスと1D CNN residual pathをゲートで統合した`GatedGenomicResNet`を使用します。
 
-## プロジェクト構成
+- marker filtering、平均imputation、標準化、PCAは学習partitionだけでfit
+- outer testとは別のvalidation familyでepochを選択
+- 選択後、outer training families全体で前処理とモデルを再fit
+- seedをPython、NumPy、PyTorchへ設定
 
-```text
-genomic-prediction-resnet-hybrid/
-├── data/                          # SoyNAM 公開遺伝型・表現型データ（16家系）
-├── processed_data_hy/             # 標準化済みデータ・グラフデータ
-│   ├── X_genotype_int8.npy        # SNP 遺伝子型行列
-│   ├── y_phenotype_hy.csv         # 表現型（収量）・家系ID
-│   ├── snp_to_gene_map.csv        # SNP → 遺伝子マッピング
-│   └── gene_adj.csv               # 遺伝子間隣接リスト（無向グラフ）
-├── pretrained_models/             # CNN 事前学習済み重み
-├── model.py                       # GatedGenomicResNet + GraphGenomicNet 定義
-├── main.py                        # ResNet LOFO-CV 学習・評価スクリプト
-├── train_gnn.py                   # GNN LOFO-CV 学習・評価スクリプト
-├── preprocess.py                  # 家系統合・標準化・SNPフィルタリング
-├── create_dummy_graph_data.py     # グラフデータ（ダミー）生成スクリプト
-├── create_dummy_pretrained_weights.py  # 事前学習済み重み（ダミー）生成スクリプト
-├── gblup_baseline.py              # GBLUP ベースライン（R/sommer 使用）
-├── sweep_config.yaml              # W&B Sweep ハイパーパラメータ探索設定
-├── Dockerfile                     # Python 3.11 + R 環境
-├── docker-compose.yml             # 前処理・学習・Sweep 用サービス定義
-├── requirements.txt               # Python 依存パッケージ
-└── .env.example                   # 環境変数テンプレート（WANDB_API_KEY, SWEEP_ID）
-```
+線形パスはAdamWで学習する正則化線形予測器です。relationship matrixやmixed model equationsを使うRR-BLUP / GBLUPと同一ではありません。比較対象のGBLUPは独立した`gblup_baseline.py`です。
 
-## セットアップ
+## 必要環境とセットアップ
 
-### ローカル環境（venv）
-
-Python 3.12 / Ubuntu 24.04 での動作を確認しています。
+- Python `3.11.x`
+- [uv](https://docs.astral.sh/uv/)（CI検証バージョン: `0.12.3`）
+- CPU実行を標準経路とするPyTorch `2.2.1`
 
 ```bash
-# 1. リポジトリをクローン
 git clone https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid.git
 cd genomic-prediction-resnet-hybrid
 
-# 2. 仮想環境を作成・有効化
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 3. PyTorch（CPU 版）をインストール
-pip install torch==2.2.1 --index-url https://download.pytorch.org/whl/cpu
-
-# 4. 残りの依存パッケージをインストール
-pip install -r requirements.txt
+uv python install
+uv sync --frozen --extra gblup --dev
 ```
 
-> **Note**: `torch_scatter` は使用していません。SNP→遺伝子集約は純 PyTorch の `scatter_add_` で実装されており、OS/Python バージョンによるバイナリ互換性問題を回避しています。
+`uv.lock`を使用するため、依存関係を更新せず再現する場合は`--frozen`を付けます。
 
-### Docker 環境
+## 入力データ
 
-```bash
-# 1. 環境変数ファイルを作成
-cp .env.example .env
-# .env を編集し WANDB_API_KEY を設定（https://wandb.ai/authorize で取得）
+既定の入力先は`data/`です。各familyについて、次のgzip圧縮TSVを1組配置します。
 
-# 2. Docker イメージをビルド（R + sommer + PyTorch を含む）
-docker compose build
-
-# 3. データの前処理
-docker compose run --rm preprocess
-
-# 4. 学習の実行
-docker compose run --rm train          # CPU
-docker compose run --rm train-gpu      # GPU（NVIDIA Container Toolkit が必要）
+```text
+<family_id>_phenotype_data.tsv.gz
+<family_id>_4312_SNP_genotype_Wm82.a1.tsv.gz
 ```
+
+表現型ファイルの必須列は次のとおりです。
+
+| 列 | 内容 |
+|---|---|
+| `Corrected Strain` | sample ID |
+| `Yld (kg/ha)` | 収量（kg/ha） |
+
+遺伝型ファイルは、先頭列をmarker ID、残りの列をsample IDとして読み込みます。対応する符号は次のとおりです。
+
+| 入力 | 数値表現 |
+|---|---:|
+| `A`, `A/A` | -1 |
+| `H`, `A/B` | 0 |
+| `B`, `B/B` | 1 |
+| `-`, empty | missing (`NaN`) |
+
+loaderはfamily単位のファイル対応、必須列、全family間のmarker集合・順序、未知の遺伝型記号、最終的な配列次元を検証します。founder parentはfamily IDから判定して除外します。
 
 ## 実行方法
 
-### ResNet モデル（GatedGenomicResNet）
+### GBLUP baseline
+
+現在のGBLUP CLIは`data/`、16 family、`gblup_results/`を前提とします。W&Bへ送信せずローカルで再現する場合はoffline modeを使います。
 
 ```bash
-# W&B ログあり（本番）
-python main.py
-
-# グラフデータの準備
-python create_dummy_graph_data.py        # 擬似グラフデータを生成
-python create_dummy_pretrained_weights.py  # 擬似事前学習済み重みを生成
+WANDB_MODE=offline \
+  uv run --frozen --extra gblup \
+  python gblup_baseline.py
 ```
 
-### GNN モデル（GraphGenomicNet）
+出力:
+
+```text
+gblup_results/oof_predictions.csv
+```
+
+### ResNet baseline
 
 ```bash
-# グラフデータが必要（create_dummy_graph_data.py で生成済みであること）
-python train_gnn.py
+uv run --frozen --extra gblup \
+  python resnet_baseline.py \
+  --data-dir data \
+  --output-dir resnet_results \
+  --device cpu \
+  --seed 42
 ```
 
-## W&B Sweep によるハイパーパラメータ探索
+主なCLI引数は`--device`、`--seed`、`--max-epochs`、`--patience`、`--batch-size`、`--pca-components`です。
 
-Bayesian 最適化で以下のパラメータを自動探索します（ResNet モデル）。
-
-| パラメータ | 範囲 | 説明 |
-|---|---|---|
-| `hidden_dim` | 128 / 256 / 512 | ResNet の隠れ層次元 |
-| `num_blocks` | 2 / 3 / 4 | 残差ブロック数 |
-| `dropout_rate` | 0.2 〜 0.5 | Dropout 率 |
-| `lr` | 5e-6 〜 1e-3 | 学習率（対数スケール） |
-| `l2_reg` | 5e-3 〜 0.2 | L2 正則化強度（対数スケール） |
-| `batch_size` | 32 / 64 | バッチサイズ |
+短時間の配線確認例:
 
 ```bash
-# Sweep を登録（SWEEP_ID が発行される）
-docker compose run --rm sweep-init
-
-# .env の SWEEP_ID を更新後、エージェントを起動（30試行で自動停止）
-docker compose run --rm sweep-agent
+uv run --frozen --extra gblup \
+  python resnet_baseline.py \
+  --data-dir data \
+  --output-dir resnet_smoke_results \
+  --device cpu \
+  --max-epochs 1 \
+  --patience 1 \
+  --pca-components 8
 ```
 
-## 評価指標
+1 epochの実行は配線と出力契約の確認用であり、予測精度の評価には使用しません。
 
-| 指標 | 説明 |
+## OOF出力契約
+
+GBLUPとResNetは同じ4列のCSVを出力します。
+
+| 列 | 内容 |
 |---|---|
-| `summary/mean_hybrid` | LOFO 全フォールド平均 Pearson 相関係数（主指標） |
-| `summary/mean_linear` | 線形パスのみの平均相関係数（ベースライン） |
-| `summary/improvement` | hybrid − linear（ResNet の寄与量） |
-| `gate_contribution` | `tanh(gate)` の値（非線形パスの開き具合） |
+| `family_id` | family ID |
+| `sample_name` | sample ID |
+| `observed_yield_kg_ha` | 観測収量 |
+| `predicted_yield_kg_ha` | held-out familyに対するOOF予測 |
 
-LOFO-CV は未知家系への外挿を評価するため、通常の k-fold より低い値になります。SoyNAM 収量データでは `r ≈ 0.1〜0.3` が実用的な水準です。
+モデル比較では同一sample・同一splitのOOF予測を使用し、fold単位のPearson相関、macro family相関、pooled OOF相関、RMSEなどを目的に応じて明示します。
 
-## 今後の展望
+## テストとCI
 
-- **GNN ハイパーパラメータ探索**: `train_gnn.py` への W&B Sweep 統合
-- **生物学的グラフの導入**: ランダムグラフに代わる実際の遺伝子共発現ネットワークの使用
-- **ResNet + GNN ハイブリッド**: 両モデルのアンサンブルによる精度向上
-- **マルチタスク学習**: 収量・登熟日数・タンパク質含量の同時予測
+```bash
+uv run --frozen --extra gblup \
+  ruff format --check \
+  gblup_baseline.py resnet_baseline.py soynam_data.py tests
+
+uv run --frozen --extra gblup \
+  ruff check \
+  gblup_baseline.py resnet_baseline.py soynam_data.py tests
+
+uv run --frozen --extra gblup pytest -q
+```
+
+GitHub Actionsでは、対象コードのformat/lint、13件の単体テスト、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。実データはCIへ含めません。
+
+## 既知の制約
+
+- GBLUPはdata directory、出力先、16 familyをCLIで変更できません。
+- split、marker filter、imputation、PCA、選択epochを機械可読な成果物として保存していません。
+- loaderはsample IDの共通部分を整列しますが、片側だけに存在するsampleや重複IDを厳格なエラーとして扱う対応は未完了です。
+- Docker / Docker Compose経路は、現在の`uv`ベースラインに対して未検証です。
+- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
+- `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。
+- CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
 ## データ引用
 
-本解析には SoyNAM プロジェクト（Soybean Nested Association Mapping）の公開データセットを使用しています。
+本解析にはSoyNAMプロジェクトの公開データセットを使用します。
 
-- Source: [https://www.soybase.org/projects/SoyNAM/](https://www.soybase.org/projects/SoyNAM/)
+- [SoyNAM project - SoyBase](https://www.soybase.org/projects/SoyNAM/)
+
+データの利用条件と引用方法は配布元の案内に従ってください。
 
 ## ライセンス
 

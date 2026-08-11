@@ -9,3 +9,16 @@ __pycache__/
 *.tsv
 .DS_Store
 .env
+
+# Generated evaluation artifacts
+gblup_results/
+logs/
+
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+
+# Model artifacts
+checkpoints/
+*.pt
+*.pth
