@@ -11,3 +11,6 @@ __pycache__/
 *.gz
 *.tsv
 *.pkl
+.venv/
+.pytest_cache/
+.ruff_cache/

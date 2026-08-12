@@ -4,7 +4,7 @@
 
 SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量を予測し、未知の家系への外挿性能を評価する研究用リポジトリです。
 
-現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweep、Docker経路はexperimentalまたは未検証として分離しています。
+現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweepはexperimentalとして分離しています。Docker / Docker Composeは、単体テストとResNet CPU smokeについて検証済みです。
 
 ## 実装状況
 
@@ -14,9 +14,10 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
 | 単体テスト・synthetic CPU smoke | CI実行 | `tests/`, `.github/workflows/ci.yml` |
+| Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
+| Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
 | 旧ResNet学習・W&B Sweep | experimental | `main.py`, `sweep_config.yaml` |
 | GNN | experimental | `train_gnn.py` |
-| Docker / Docker Compose | 未検証 | `Dockerfile`, `docker-compose.yml` |
 
 「検証済み」は、入力整合性・split・前処理・出力契約とCPU上の実行経路を自動テストまたはスモークテストで確認したことを意味します。予測精度の優位性や大規模GPU実験の再現を保証するものではありません。
 
@@ -147,6 +148,59 @@ uv run --frozen --extra gblup \
 
 1 epochの実行は配線と出力契約の確認用であり、予測精度の評価には使用しません。
 
+## Docker / Docker Compose
+
+`Dockerfile`は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
+
+`docker-compose.yml`のサービスは次の3系統に分かれます。
+
+| 系統 | profile | 起動対象になる条件 |
+|---|---|---|
+| 検証済み（`unit-test`, `cpu-smoke`） | なし | `docker compose up`／`docker compose run <service>`で常に対象 |
+| 実データ（`gblup`, `resnet`） | `real-data` | `--profile real-data`を明示した場合のみ |
+| legacy/experimental（`preprocess`, `train`, `train-gpu`, `sweep-init`, `sweep-agent`, `gblup-baseline`, `dev`, `create-weights`, `create-graph-data`, `train-gnn`） | `legacy` | `--profile legacy`を明示した場合のみ |
+
+`docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`legacy`のサービスは、検証済みベースライン経路ではないため既定では起動しません。
+
+### 単体テスト（unit-test）
+
+外部データ・GPU・`.env`・W&B API keyは不要です。bind mountも使用せず、イメージ内のソースだけで実行します。
+
+```bash
+docker compose build unit-test
+docker compose run --rm unit-test
+```
+
+### CPU smoke test（cpu-smoke）
+
+3 familyのsynthetic dataのみを使い、`resnet_baseline.py`のCLIと4列のOOF出力契約を検証します。外部データ・GPU・`.env`・W&B API keyは不要です。
+
+```bash
+docker compose build cpu-smoke
+docker compose run --rm cpu-smoke
+```
+
+### GBLUP・ResNet（実データ、手動実行）
+
+`gblup`・`resnet`サービスは、実データを保有する利用者が手動で起動する経路です。`profiles: ["real-data"]`が付いており、CIでは実行しません。実行前に、[入力データ](#入力データ)節と同じ形式のSoyNAMデータを`./data`に配置してください。`data/`はいずれもread-onlyでmountし、結果ディレクトリのみ書き込み可能にしています。
+
+```bash
+# GBLUP（現時点のCLIはdata/、16 family、gblup_results/を前提とするため、
+# 家系数が異なるデータでは完走しません）
+docker compose --profile real-data run --rm gblup
+
+# ResNet
+docker compose --profile real-data run --rm resnet
+```
+
+`gblup`サービスは`WANDB_MODE=offline`をCompose側で設定しているため、W&B API keyは不要です。実データが無い状態でこれらのサービスを実行した場合の挙動（`FileNotFoundError`等）はCIでの検証対象にしていません。
+
+### legacy / experimental
+
+`preprocess`・`train`・`train-gpu`・`sweep-init`・`sweep-agent`・`gblup-baseline`・`dev`・`create-weights`・`create-graph-data`・`train-gnn`は`profiles: ["legacy"]`で分離されています。これらは検証済みベースライン経路ではなく、`--profile legacy`を明示しない限り起動しません。
+
+実データはリポジトリにもDockerビルドコンテキストにも含めません（`.gitignore`・`.dockerignore`でそれぞれ除外済み）。`data/`はbind mountでのみコンテナへ渡します。
+
 ## OOF出力契約
 
 GBLUPとResNetは同じ4列のCSVを出力します。
@@ -174,13 +228,13 @@ uv run --frozen --extra gblup \
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。実データはCIへ含めません。
+GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
-- GBLUPはdata directory、出力先、16 familyをCLIで変更できません。
+- GBLUPはdata directory、出力先、16 familyをCLIで変更できません（Docker Composeの`gblup`サービスも同じ制約を継承します）。
 - split、marker filter、imputation、PCA、選択epochを機械可読な成果物として保存していません。
-- Docker / Docker Compose経路は、現在の`uv`ベースラインに対して未検証です。
+- Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
 - `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。
 - CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。

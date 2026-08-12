@@ -1,8 +1,58 @@
 services:
 
+  # ---------------------------------------------------------------------
+  # 検証済み経路（uv.lockベースのイメージ、profile指定なし＝既定で起動対象）
+  # ---------------------------------------------------------------------
+
+  # 単体テスト（tests/test_cpu_smoke.py を除く）
+  # 外部データ・GPU・.env・W&B API keyは不要。bind mountも不要。
+  unit-test:
+    build: .
+    command: pytest -q --ignore=tests/test_cpu_smoke.py
+
+  # ResNet CLIと出力契約をsyntheticデータで検証するCPU smoke test
+  # 外部データ・GPU・.env・W&B API keyは不要。bind mountも不要。
+  cpu-smoke:
+    build: .
+    environment:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    command: pytest -q tests/test_cpu_smoke.py
+
+  # GBLUP ベースライン（実データ利用者向けの手動実行経路）
+  # data/ はread-only、結果ディレクトリのみ書き込み可能。CIでは実行しない。
+  gblup:
+    build: .
+    profiles: ["real-data"]
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./gblup_results:/workspace/gblup_results
+    environment:
+      WANDB_MODE: offline
+    command: python gblup_baseline.py
+
+  # ResNet ベースライン（実データ利用者向けの手動実行経路）
+  # data/ はread-only、結果ディレクトリのみ書き込み可能。CIでは実行しない。
+  resnet:
+    build: .
+    profiles: ["real-data"]
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./resnet_results:/workspace/resnet_results
+    command: >
+      python resnet_baseline.py
+      --data-dir data
+      --output-dir resnet_results
+      --device cpu
+
+  # ---------------------------------------------------------------------
+  # legacy / experimental経路（検証済みベースラインではない。既定では起動しない）
+  # ---------------------------------------------------------------------
+
   # 生データ → processed_data_hy/ に変換
   preprocess:
     build: .
+    profiles: ["legacy"]
     volumes:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
@@ -11,6 +61,7 @@ services:
   # 学習（CPU モード）
   train:
     build: .
+    profiles: ["legacy"]
     volumes:
       - .:/workspace
       - ./data:/workspace/data:ro
@@ -22,6 +73,7 @@ services:
   # 学習（GPU モード）: NVIDIA Container Toolkit が必要
   train-gpu:
     build: .
+    profiles: ["legacy"]
     volumes:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
@@ -39,6 +91,7 @@ services:
   # W&B Sweep エージェント
   sweep-init:
     build: .
+    profiles: ["legacy"]
     volumes:
       - ./wandb:/workspace/wandb
     env_file: .env
@@ -46,6 +99,7 @@ services:
 
   sweep-agent:
     build: .
+    profiles: ["legacy"]
     volumes:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
@@ -53,9 +107,10 @@ services:
     env_file: .env
     command: sh -c "wandb agent --count 30 $$SWEEP_ID"
 
-  # GBLUP ベースライン
+  # 旧GBLUPベースライン実行サービス（R/sommer時代のDockerfileを前提とした定義）
   gblup-baseline:
     build: .
+    profiles: ["legacy"]
     volumes:
       - ./data:/workspace/data:ro
       - ./processed_data_hy:/workspace/processed_data_hy
@@ -66,6 +121,7 @@ services:
   # 対話的な開発・デバッグ用シェル
   dev:
     build: .
+    profiles: ["legacy"]
     security_opt:
       - seccomp:unconfined
     volumes:
@@ -81,6 +137,7 @@ services:
   # 転移学習用の擬似的な重みを作成
   create-weights:
     build: .
+    profiles: ["legacy"]
     volumes:
       - .:/workspace
     command: python3 create_dummy_pretrained_weights.py
@@ -88,6 +145,7 @@ services:
   # GNN用の擬似的なグラフデータを作成
   create-graph-data:
     build: .
+    profiles: ["legacy"]
     volumes:
       - .:/workspace
     command: python3 create_dummy_graph_data.py
@@ -95,6 +153,7 @@ services:
   # GNNモデルの訓練
   train-gnn:
     build: .
+    profiles: ["legacy"]
     volumes:
       - .:/workspace
     env_file: .env

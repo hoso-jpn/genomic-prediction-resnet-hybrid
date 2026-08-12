@@ -1,6 +1,0 @@
-torch==2.2.1
-torch-geometric
-wandb
-numpy<2
-pandas
-scikit-learn
