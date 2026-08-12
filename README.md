@@ -71,6 +71,8 @@ uv sync --frozen --extra gblup --dev
 <family_id>_4312_SNP_genotype_Wm82.a1.tsv.gz
 ```
 
+phenotype/genotypeファイルはファイル名から抽出したfamily IDで対応付けます。同じfamily IDへ複数のphenotypeファイル、または複数のgenotypeファイルが対応する場合はエラーとし、phenotype側とgenotype側のfamily ID集合が一致しない場合もエラーとします。
+
 表現型ファイルの必須列は次のとおりです。
 
 | 列 | 内容 |
@@ -87,7 +89,17 @@ uv sync --frozen --extra gblup --dev
 | `B`, `B/B` | 1 |
 | `-`, empty | missing (`NaN`) |
 
-loaderはfamily単位のファイル対応、必須列、全family間のmarker集合・順序、未知の遺伝型記号、最終的な配列次元を検証します。founder parentはfamily IDから判定して除外します。
+未知の記号が含まれる場合はエラーとします。
+
+loaderは読み込み時に次を検証します。
+
+- sample ID（phenotypeの`Corrected Strain`列、genotypeの先頭行の列名）とmarker ID（genotypeの先頭列）は、前後の空白を除去したうえで、欠損・空文字・重複を許容しません。違反した場合はfamily ID、対象ファイル名、対象IDを含むエラーになります。genotypeファイルはpandasによる重複ヘッダーの自動リネームを避けるため、先頭行を直接読み取って検証してから本体を読み込みます。
+- founder parent（family IDを`_NAM`で分割した前半部分）はphenotype/genotype双方のsample集合比較から除外します。片側のファイルにだけfounder parentの列・行が存在していても、RIL sample照合には影響しません。
+- founder parent除外後のRIL sample集合は、phenotypeとgenotypeで完全に一致する必要があります。一致しない場合、`phenotype_only`・`genotype_only`としてどちらか一方にしか存在しないsample IDを列挙したエラーになります（共通部分だけを採用する暗黙の整列は行いません）。
+- 全familyのmarker集合と順序は、最初に読み込んだfamilyを基準に一致している必要があります。marker集合そのものが異なる場合と、集合は同じだが順序だけが異なる場合を区別してエラーにします。
+- phenotype値の欠損・空文字は、sample ID照合が成功した後に判定します。該当するsampleは学習対象から除外されますが、それ以外の値は数値へ変換できない場合エラーになります。欠損個体を除外した結果、familyのRIL sampleが0件になった場合もエラーになります。
+
+出力される配列のsample順序は、phenotypeファイル内の出現順を維持します。
 
 ## 実行方法
 
@@ -162,13 +174,12 @@ uv run --frozen --extra gblup \
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、13件の単体テスト、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。実データはCIへ含めません。
+GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。実データはCIへ含めません。
 
 ## 既知の制約
 
 - GBLUPはdata directory、出力先、16 familyをCLIで変更できません。
 - split、marker filter、imputation、PCA、選択epochを機械可読な成果物として保存していません。
-- loaderはsample IDの共通部分を整列しますが、片側だけに存在するsampleや重複IDを厳格なエラーとして扱う対応は未完了です。
 - Docker / Docker Compose経路は、現在の`uv`ベースラインに対して未検証です。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
 - `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。
