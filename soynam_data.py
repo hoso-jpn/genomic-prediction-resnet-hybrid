@@ -104,6 +104,17 @@ def _pair_family_files(data_dir: Path) -> list[tuple[str, Path, Path]]:
     ]
 
 
+def list_family_files(data_dir: str | Path = "data") -> list[tuple[str, Path, Path]]:
+    """List the validated (family_id, phenotype_path, genotype_path) triples.
+
+    Reuses the same file-pairing and collision checks as
+    ``load_soynam_dataset`` so callers (e.g. run manifest builders) never
+    re-derive which files were actually read from a second, divergent code
+    path.
+    """
+    return _pair_family_files(Path(data_dir))
+
+
 def _strip_identifiers(values: list[object]) -> list[str]:
     """Strip identifiers, mapping missing values to an empty string."""
     stripped: list[str] = []
@@ -331,8 +342,19 @@ def _encode_genotypes(frame: pd.DataFrame, family_id: str) -> FloatArray:
     return encoded
 
 
-def load_soynam_dataset(data_dir: str | Path = "data") -> SoynamDataset:
-    """Load aligned RIL phenotypes and genotypes, excluding founder parents."""
+def load_soynam_dataset(
+    data_dir: str | Path = "data",
+    *,
+    family_files: list[tuple[str, Path, Path]] | None = None,
+) -> SoynamDataset:
+    """Load aligned RIL phenotypes and genotypes, excluding founder parents.
+
+    If ``family_files`` is given (typically a prior ``list_family_files``
+    result), it is used as-is instead of re-resolving ``data_dir``. This
+    lets a caller fix the exact file list once and pass that same list to
+    both this loader and a run manifest, rather than risking a directory
+    change between two separate resolutions of the same path.
+    """
     data_path = Path(data_dir)
     genotype_blocks: list[FloatArray] = []
     phenotype_blocks: list[FloatArray] = []
@@ -340,7 +362,10 @@ def load_soynam_dataset(data_dir: str | Path = "data") -> SoynamDataset:
     sample_labels: list[str] = []
     expected_markers: pd.Index | None = None
 
-    for family_id, phenotype_path, genotype_path in _pair_family_files(data_path):
+    resolved_family_files = (
+        family_files if family_files is not None else _pair_family_files(data_path)
+    )
+    for family_id, phenotype_path, genotype_path in resolved_family_files:
         phenotype_frame = _load_phenotype_frame(phenotype_path, family_id)
         genotype_frame = _load_genotype_frame(genotype_path, family_id)
 

@@ -42,6 +42,7 @@ jobs:
           gblup_baseline.py
           resnet_baseline.py
           soynam_data.py
+          run_manifest.py
           tests
 
       - name: Run Ruff
@@ -51,6 +52,7 @@ jobs:
           gblup_baseline.py
           resnet_baseline.py
           soynam_data.py
+          run_manifest.py
           tests
 
       - name: Run unit tests

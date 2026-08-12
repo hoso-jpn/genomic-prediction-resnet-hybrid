@@ -12,6 +12,7 @@ __pycache__/
 
 # Generated evaluation artifacts
 gblup_results/
+resnet_results/
 logs/
 
 # Test and lint caches

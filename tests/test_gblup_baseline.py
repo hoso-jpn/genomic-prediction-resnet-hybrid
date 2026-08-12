@@ -183,6 +183,52 @@ class GblupBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not be constant"):
             gblup.fit_gblup_reml(np.eye(4), np.ones(4))
 
+    def test_fold_preprocessing_record_matches_relationships(self) -> None:
+        train = np.array(
+            [
+                [-1.0, -1.0, np.nan],
+                [0.0, -1.0, 1.0],
+                [1.0, 1.0, -1.0],
+                [0.0, 1.0, 0.0],
+            ]
+        )
+        test = np.array([[np.nan, 1.0, 1.0]])
+        relationships = gblup.prepare_fold_relationships(
+            train, test, min_observed_rate=0.25, maf_threshold=0.0
+        )
+
+        record, arrays = gblup.build_fold_preprocessing_record(
+            2, "NAM03", relationships
+        )
+
+        self.assertEqual(record["fold_index"], 2)
+        self.assertEqual(record["held_out_family"], "NAM03")
+        self.assertEqual(
+            record["total_marker_count"], int(relationships.retained_markers.size)
+        )
+        self.assertEqual(
+            record["retained_marker_count"], int(relationships.retained_markers.sum())
+        )
+        self.assertAlmostEqual(record["denominator"], relationships.denominator)
+
+        marker_mask_key = record["arrays"]["marker_mask_ref"]
+        imputation_mean_key = record["arrays"]["imputation_mean_ref"]
+        allele_frequency_key = record["arrays"]["allele_frequency_ref"]
+        observed_rate_key = record["arrays"]["observed_rate_ref"]
+
+        np.testing.assert_array_equal(
+            arrays[marker_mask_key], relationships.retained_markers
+        )
+        np.testing.assert_allclose(
+            arrays[imputation_mean_key], relationships.marker_means
+        )
+        np.testing.assert_allclose(
+            arrays[allele_frequency_key], (relationships.marker_means + 1.0) / 2.0
+        )
+        np.testing.assert_allclose(
+            arrays[observed_rate_key], relationships.observed_rates
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import random
-from dataclasses import dataclass
+import sys
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -16,8 +19,11 @@ from sklearn.model_selection import LeaveOneGroupOut
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import model
+import run_manifest
+import soynam_data
 from model import GatedGenomicResNet
-from soynam_data import SoynamDataset, load_soynam_dataset
+from soynam_data import SoynamDataset, list_family_files, load_soynam_dataset
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -50,6 +56,27 @@ class FeatureTransform:
     marker_means: FloatArray
     marker_scales: FloatArray
     pca: PCA
+
+
+@dataclass(frozen=True)
+class ResnetFoldRecord:
+    """Everything recorded about one outer fold: split assignment, the two
+    feature transforms fitted within it, the two target standardizations
+    used to train and invert each stage's predictions, and its fold-level
+    metric."""
+
+    fold_index: int
+    held_out_family: str
+    validation_family: str
+    fold_seed: int
+    best_epoch: int
+    selection_transform: FeatureTransform
+    selection_target_mean: float
+    selection_target_scale: float
+    final_transform: FeatureTransform
+    final_target_mean: float
+    final_target_scale: float
+    correlation: float
 
 
 def seed_everything(seed: int) -> None:
@@ -225,7 +252,7 @@ def _select_epoch(
     config: ResNetConfig,
     seed: int,
     device: torch.device,
-) -> int:
+) -> tuple[int, FeatureTransform, float, float]:
     transform = fit_feature_transform(fit_x, config, seed)
     fit_snps, fit_pcs = transform_features(fit_x, transform)
     validation_snps, validation_pcs = transform_features(validation_x, transform)
@@ -258,7 +285,7 @@ def _select_epoch(
             stale_epochs += 1
             if stale_epochs >= config.patience:
                 break
-    return best_epoch
+    return best_epoch, transform, target_mean, target_scale
 
 
 def predict_resnet_fold(
@@ -270,8 +297,9 @@ def predict_resnet_fold(
     fold_index: int,
     config: ResNetConfig,
     device: torch.device,
-) -> tuple[FloatArray, int, str]:
+) -> tuple[FloatArray, ResnetFoldRecord]:
     """Select an epoch without test data, refit, and predict one held-out family."""
+    held_out_family = str(np.unique(family_ids[test_indices])[0])
     validation_family = select_validation_family(
         family_ids[train_indices], fold_index, config.seed
     )
@@ -279,23 +307,29 @@ def predict_resnet_fold(
     fit_indices = train_indices[~validation_mask]
     validation_indices = train_indices[validation_mask]
     fold_seed = config.seed + fold_index * 100
-    best_epoch = _select_epoch(
-        genotypes[fit_indices],
-        phenotypes[fit_indices],
-        genotypes[validation_indices],
-        phenotypes[validation_indices],
-        config,
-        fold_seed,
-        device,
+    best_epoch, selection_transform, selection_target_mean, selection_target_scale = (
+        _select_epoch(
+            genotypes[fit_indices],
+            phenotypes[fit_indices],
+            genotypes[validation_indices],
+            phenotypes[validation_indices],
+            config,
+            fold_seed,
+            device,
+        )
     )
 
-    transform = fit_feature_transform(genotypes[train_indices], config, fold_seed + 1)
-    train_snps, train_pcs = transform_features(genotypes[train_indices], transform)
-    test_snps, test_pcs = transform_features(genotypes[test_indices], transform)
-    target_mean, target_scale = _target_scale(phenotypes[train_indices])
-    train_targets = ((phenotypes[train_indices] - target_mean) / target_scale).astype(
-        np.float32
+    final_transform = fit_feature_transform(
+        genotypes[train_indices], config, fold_seed + 1
     )
+    train_snps, train_pcs = transform_features(
+        genotypes[train_indices], final_transform
+    )
+    test_snps, test_pcs = transform_features(genotypes[test_indices], final_transform)
+    final_target_mean, final_target_scale = _target_scale(phenotypes[train_indices])
+    train_targets = (
+        (phenotypes[train_indices] - final_target_mean) / final_target_scale
+    ).astype(np.float32)
 
     seed_everything(fold_seed + 1)
     model = _new_model(train_snps.shape[1], train_pcs.shape[1], config, device)
@@ -308,21 +342,38 @@ def predict_resnet_fold(
     for _ in range(best_epoch):
         _train_epoch(model, loader, optimizer, device)
     standardized = _predict_standardized(model, test_snps, test_pcs, device)
-    return standardized * target_scale + target_mean, best_epoch, validation_family
+    predictions = standardized * final_target_scale + final_target_mean
+    correlation = float(np.corrcoef(phenotypes[test_indices], predictions)[0, 1])
+    record = ResnetFoldRecord(
+        fold_index=fold_index,
+        held_out_family=held_out_family,
+        validation_family=validation_family,
+        fold_seed=fold_seed,
+        best_epoch=best_epoch,
+        selection_transform=selection_transform,
+        selection_target_mean=selection_target_mean,
+        selection_target_scale=selection_target_scale,
+        final_transform=final_transform,
+        final_target_mean=final_target_mean,
+        final_target_scale=final_target_scale,
+        correlation=correlation,
+    )
+    return predictions, record
 
 
 def run_lofo(
     dataset: SoynamDataset,
     config: ResNetConfig,
     device: torch.device,
-) -> FloatArray:
+) -> tuple[FloatArray, list[ResnetFoldRecord]]:
     """Generate one prediction for every sample using outer family-wise CV."""
     predictions = np.full(dataset.phenotypes.size, np.nan, dtype=np.float64)
+    fold_records: list[ResnetFoldRecord] = []
     splitter = LeaveOneGroupOut()
     for fold_index, (train_indices, test_indices) in enumerate(
         splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
     ):
-        fold_predictions, best_epoch, validation_family = predict_resnet_fold(
+        fold_predictions, fold_record = predict_resnet_fold(
             dataset.genotypes,
             dataset.phenotypes,
             dataset.family_ids,
@@ -333,17 +384,14 @@ def run_lofo(
             device,
         )
         predictions[test_indices] = fold_predictions
-        held_out_family = str(np.unique(dataset.family_ids[test_indices])[0])
-        correlation = np.corrcoef(dataset.phenotypes[test_indices], fold_predictions)[
-            0, 1
-        ]
+        fold_records.append(fold_record)
         print(
-            f"{held_out_family:22s} r={correlation:.4f} "
-            f"epoch={best_epoch} validation={validation_family}"
+            f"{fold_record.held_out_family:22s} r={fold_record.correlation:.4f} "
+            f"epoch={fold_record.best_epoch} validation={fold_record.validation_family}"
         )
     if not np.isfinite(predictions).all():
         raise RuntimeError("LOFO-CV did not produce every OOF prediction")
-    return predictions
+    return predictions, fold_records
 
 
 def make_oof_frame(dataset: SoynamDataset, predictions: FloatArray) -> pd.DataFrame:
@@ -355,6 +403,244 @@ def make_oof_frame(dataset: SoynamDataset, predictions: FloatArray) -> pd.DataFr
             "observed_yield_kg_ha": dataset.phenotypes,
             "predicted_yield_kg_ha": predictions,
         }
+    )
+
+
+def build_transform_record(
+    prefix: str,
+    transform: FeatureTransform,
+    *,
+    target_mean: float,
+    target_scale: float,
+) -> tuple[dict[str, Any], dict[str, FloatArray]]:
+    """Build one feature transform's preprocessing entry and NPZ-backed arrays.
+
+    Reuses the training-derived statistics and fitted PCA already held by
+    ``FeatureTransform``, plus the target mean/scale used to standardize and
+    invert this stage's predictions, without recomputing or altering them.
+    """
+    arrays: dict[str, FloatArray] = {
+        f"{prefix}_marker_mask": transform.retained_markers,
+        f"{prefix}_imputation_mean": transform.marker_means,
+        f"{prefix}_standardization_mean": transform.marker_means,
+        f"{prefix}_standardization_scale": transform.marker_scales,
+        f"{prefix}_pca_mean": transform.pca.mean_,
+        f"{prefix}_pca_components": transform.pca.components_,
+        f"{prefix}_pca_explained_variance_ratio": (
+            transform.pca.explained_variance_ratio_
+        ),
+    }
+    record = {
+        "input_feature_count": int(transform.retained_markers.size),
+        "retained_marker_count": int(transform.retained_markers.sum()),
+        "output_feature_count": int(transform.pca.n_components_),
+        "target_mean": float(target_mean),
+        "target_scale": float(target_scale),
+        "arrays": {
+            "marker_mask_ref": f"{prefix}_marker_mask",
+            "imputation_mean_ref": f"{prefix}_imputation_mean",
+            "standardization_mean_ref": f"{prefix}_standardization_mean",
+            "standardization_scale_ref": f"{prefix}_standardization_scale",
+            "pca_mean_ref": f"{prefix}_pca_mean",
+            "pca_components_ref": f"{prefix}_pca_components",
+            "pca_explained_variance_ratio_ref": (
+                f"{prefix}_pca_explained_variance_ratio"
+            ),
+        },
+    }
+    return record, arrays
+
+
+def build_fold_preprocessing_entry(
+    fold_record: ResnetFoldRecord,
+) -> tuple[dict[str, Any], dict[str, FloatArray]]:
+    """Build one fold's preprocessing.json entry, covering both transforms."""
+    selection_prefix = f"fold_{fold_record.fold_index:03d}_selection"
+    final_prefix = f"fold_{fold_record.fold_index:03d}_final"
+    selection_record, selection_arrays = build_transform_record(
+        selection_prefix,
+        fold_record.selection_transform,
+        target_mean=fold_record.selection_target_mean,
+        target_scale=fold_record.selection_target_scale,
+    )
+    final_record, final_arrays = build_transform_record(
+        final_prefix,
+        fold_record.final_transform,
+        target_mean=fold_record.final_target_mean,
+        target_scale=fold_record.final_target_scale,
+    )
+    entry = {
+        "fold_index": fold_record.fold_index,
+        "held_out_family": fold_record.held_out_family,
+        "validation_family": fold_record.validation_family,
+        "fold_seed": fold_record.fold_seed,
+        "best_epoch": fold_record.best_epoch,
+        "selection_transform": selection_record,
+        "final_transform": final_record,
+    }
+    return entry, {**selection_arrays, **final_arrays}
+
+
+def build_inner_split(
+    fold_records: Sequence[ResnetFoldRecord],
+    family_ids: Sequence[str],
+    seed: int,
+) -> dict[str, Any]:
+    """Build the ResNet-specific inner validation-family split record."""
+    unique_families = sorted({str(family_id) for family_id in family_ids})
+    folds = []
+    for fold_record in fold_records:
+        outer_train_families = [
+            family
+            for family in unique_families
+            if family != fold_record.held_out_family
+        ]
+        fit_family_ids = [
+            family
+            for family in outer_train_families
+            if family != fold_record.validation_family
+        ]
+        folds.append(
+            {
+                "fold_index": fold_record.fold_index,
+                "validation_family": fold_record.validation_family,
+                "fit_family_ids": fit_family_ids,
+            }
+        )
+    return {
+        "strategy": "validation_family_selection",
+        "seed": seed,
+        "folds": folds,
+    }
+
+
+def _device_environment_info(requested: str, resolved: torch.device) -> dict[str, Any]:
+    """Describe the compute device actually used, for reproducibility.
+
+    ``--device auto`` (or an omitted flag) resolves to CPU or CUDA
+    depending on availability at run time; recording both the request and
+    the resolution is the only way to tell which one actually ran.
+    """
+    info: dict[str, Any] = {
+        "device_requested": requested,
+        "device_resolved": str(resolved),
+        "cuda_version": None,
+        "cudnn_version": None,
+    }
+    if resolved.type == "cuda":
+        info["cuda_version"] = torch.version.cuda
+        if torch.backends.cudnn.is_available():
+            info["cudnn_version"] = torch.backends.cudnn.version()
+    return info
+
+
+def save_run_artifacts(
+    *,
+    output_dir: Path,
+    dataset: SoynamDataset,
+    config: ResNetConfig,
+    device: torch.device,
+    device_requested: str,
+    predictions_frame: pd.DataFrame,
+    fold_records: list[ResnetFoldRecord],
+    command_arguments: list[str],
+    input_files: list[dict[str, str]],
+    source_checksums: dict[str, str],
+) -> Path:
+    """Assemble this run's metadata/split/preprocessing/metrics and write them.
+
+    ``input_files`` and ``source_checksums`` must be captured once at the
+    start of the run (before training) and passed in as-is, so the recorded
+    checksums describe what was actually read rather than whatever happens
+    to be on disk when the run finishes.
+    """
+    families = sorted({str(family_id) for family_id in dataset.family_ids})
+
+    preprocessing_entries = []
+    preprocessing_arrays: dict[str, FloatArray] = {}
+    metric_folds = []
+    for fold_record in fold_records:
+        entry, arrays = build_fold_preprocessing_entry(fold_record)
+        preprocessing_entries.append(entry)
+        preprocessing_arrays.update(arrays)
+        metric_folds.append(
+            {
+                "fold_index": fold_record.fold_index,
+                "held_out_family": fold_record.held_out_family,
+                # A short smoke run can yield near-constant predictions, making
+                # the Pearson correlation undefined; represent that as JSON
+                # null rather than letting a non-finite float reach write_json.
+                "pearson_r": run_manifest.json_safe_float(fold_record.correlation),
+            }
+        )
+
+    split = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "outer": run_manifest.build_outer_split(
+            dataset.sample_names.tolist(), dataset.family_ids.tolist()
+        ),
+        "inner": build_inner_split(
+            fold_records, dataset.family_ids.tolist(), config.seed
+        ),
+    }
+    hyperparameters = {
+        key: value for key, value in asdict(config).items() if key != "seed"
+    }
+    preprocessing = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "model": "resnet",
+        "config": {
+            "min_observed_rate": config.min_observed_rate,
+            "maf_threshold": config.maf_threshold,
+            "imputation": "training_mean",
+            "standardization": "training_zscore",
+            "pca": {"svd_solver": "randomized"},
+            "hyperparameters": hyperparameters,
+        },
+        "folds": preprocessing_entries,
+    }
+    metrics = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "model": "resnet",
+        "folds": metric_folds,
+    }
+
+    run_id = run_manifest.new_run_id()
+    metadata = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "run_id": run_id,
+        "created_at": run_manifest.utc_now_iso(),
+        "model_name": "resnet",
+        "git_commit": run_manifest.git_commit_sha(Path(__file__).resolve().parent),
+        "source_file_checksums": source_checksums,
+        "command": run_manifest.sanitize_command(
+            Path(sys.argv[0]).name, command_arguments
+        ),
+        "seed": config.seed,
+        "python_version": run_manifest.python_version(),
+        "library_versions": run_manifest.library_versions(
+            ["numpy", "pandas", "scikit-learn", "torch"]
+        ),
+        "hyperparameters": hyperparameters,
+        **_device_environment_info(device_requested, device),
+        "input_files": input_files,
+        "families": families,
+        "split_ref": "split.json",
+        "preprocessing_ref": "preprocessing.json",
+        "preprocessing_arrays_ref": "preprocessing_arrays.npz",
+        "metrics_ref": "metrics.json",
+        "predictions_ref": "predictions.csv",
+    }
+
+    return run_manifest.write_run_artifacts(
+        output_dir=output_dir,
+        run_id=run_id,
+        metadata=metadata,
+        split=split,
+        preprocessing=preprocessing,
+        preprocessing_arrays=preprocessing_arrays,
+        metrics=metrics,
+        predictions=predictions_frame,
     )
 
 
@@ -388,12 +674,37 @@ def main() -> None:
         batch_size=args.batch_size,
         pca_components=args.pca_components,
     )
-    dataset = load_soynam_dataset(args.data_dir)
-    predictions = run_lofo(dataset, config, device)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    make_oof_frame(dataset, predictions).to_csv(
-        args.output_dir / "oof_predictions.csv", index=False
+    # Fix the file list and its checksums once, before loading, so metadata
+    # describes exactly what was read rather than whatever is on disk by
+    # the time this (potentially long) run finishes.
+    family_files = list_family_files(args.data_dir)
+    input_files = run_manifest.describe_input_files(family_files)
+    source_checksums = run_manifest.source_file_checksums(
+        [
+            Path(__file__),
+            Path(model.__file__),
+            Path(soynam_data.__file__),
+            Path(run_manifest.__file__),
+        ]
     )
+
+    dataset = load_soynam_dataset(args.data_dir, family_files=family_files)
+    predictions, fold_records = run_lofo(dataset, config, device)
+    predictions_frame = make_oof_frame(dataset, predictions)
+    run_manifest.verify_input_files_unchanged(family_files, input_files)
+    run_dir = save_run_artifacts(
+        output_dir=args.output_dir,
+        dataset=dataset,
+        config=config,
+        device=device,
+        device_requested=args.device,
+        predictions_frame=predictions_frame,
+        fold_records=fold_records,
+        command_arguments=sys.argv[1:],
+        input_files=input_files,
+        source_checksums=source_checksums,
+    )
+    print(f"run artifacts: {run_dir}")
 
 
 if __name__ == "__main__":
