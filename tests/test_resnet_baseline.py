@@ -5,6 +5,8 @@ import torch
 
 from resnet_baseline import (
     ResNetConfig,
+    build_fold_preprocessing_entry,
+    build_transform_record,
     fit_feature_transform,
     make_oof_frame,
     predict_resnet_fold,
@@ -72,7 +74,7 @@ class ResNetBaselineTest(unittest.TestCase):
             min_observed_rate=1.0,
             maf_threshold=0.0,
         )
-        first, _, _ = predict_resnet_fold(
+        first, _ = predict_resnet_fold(
             genotypes,
             phenotypes,
             family_ids,
@@ -84,7 +86,7 @@ class ResNetBaselineTest(unittest.TestCase):
         )
         changed = phenotypes.copy()
         changed[test_indices] += 10_000.0
-        second, _, _ = predict_resnet_fold(
+        second, _ = predict_resnet_fold(
             genotypes,
             changed,
             family_ids,
@@ -113,6 +115,115 @@ class ResNetBaselineTest(unittest.TestCase):
                 "observed_yield_kg_ha",
                 "predicted_yield_kg_ha",
             ],
+        )
+
+    def test_build_transform_record_matches_fitted_transform(self) -> None:
+        train = np.asarray(
+            [
+                [-1.0, -1.0, -1.0, -1.0],
+                [1.0, 0.0, 1.0, -1.0],
+                [-1.0, 1.0, -1.0, -1.0],
+                [1.0, np.nan, 1.0, -1.0],
+            ]
+        )
+        config = ResNetConfig(
+            pca_components=2, min_observed_rate=0.5, maf_threshold=0.0
+        )
+        transform = fit_feature_transform(train, config, seed=7)
+
+        record, arrays = build_transform_record("fold_000_final", transform)
+
+        self.assertEqual(
+            record["input_feature_count"], int(transform.retained_markers.size)
+        )
+        self.assertEqual(
+            record["retained_marker_count"], int(transform.retained_markers.sum())
+        )
+        self.assertEqual(record["output_feature_count"], transform.pca.n_components_)
+        np.testing.assert_array_equal(
+            arrays["fold_000_final_marker_mask"], transform.retained_markers
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_imputation_mean"], transform.marker_means
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_standardization_mean"], transform.marker_means
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_standardization_scale"], transform.marker_scales
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_pca_mean"], transform.pca.mean_
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_pca_components"], transform.pca.components_
+        )
+        np.testing.assert_allclose(
+            arrays["fold_000_final_pca_explained_variance_ratio"],
+            transform.pca.explained_variance_ratio_,
+        )
+
+    def test_fold_preprocessing_entry_distinguishes_selection_and_final_transforms(
+        self,
+    ) -> None:
+        family_ids = np.asarray(["A"] * 4 + ["B"] * 4 + ["C"] * 4)
+        genotypes = np.asarray(
+            [[0.0, 0.0]] * 4
+            + [[-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [1.0, 1.0]]
+            + [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [-1.0, -1.0]],
+            dtype=np.float64,
+        )
+        phenotypes = np.arange(12, dtype=np.float64)
+        test_indices = np.flatnonzero(family_ids == "A")
+        train_indices = np.flatnonzero(family_ids != "A")
+        config = ResNetConfig(
+            hidden_dim=4,
+            num_blocks=1,
+            dropout_rate=0.0,
+            pca_components=1,
+            batch_size=4,
+            max_epochs=1,
+            patience=1,
+            min_observed_rate=1.0,
+            maf_threshold=0.0,
+            seed=42,
+        )
+
+        _, fold_record = predict_resnet_fold(
+            genotypes,
+            phenotypes,
+            family_ids,
+            train_indices,
+            test_indices,
+            0,
+            config,
+            torch.device("cpu"),
+        )
+
+        # "B" and "C" hold distinct genotype means, so excluding the
+        # validation family from the selection-stage fit must yield a
+        # different imputation mean than the full outer-training refit.
+        self.assertNotEqual(fold_record.validation_family, fold_record.held_out_family)
+        self.assertFalse(
+            np.array_equal(
+                fold_record.selection_transform.marker_means,
+                fold_record.final_transform.marker_means,
+            )
+        )
+
+        entry, arrays = build_fold_preprocessing_entry(fold_record)
+        selection_refs = set(entry["selection_transform"]["arrays"].values())
+        final_refs = set(entry["final_transform"]["arrays"].values())
+        self.assertTrue(selection_refs.isdisjoint(final_refs))
+        self.assertEqual(set(arrays), selection_refs | final_refs)
+
+        np.testing.assert_allclose(
+            arrays[entry["selection_transform"]["arrays"]["imputation_mean_ref"]],
+            fold_record.selection_transform.marker_means,
+        )
+        np.testing.assert_allclose(
+            arrays[entry["final_transform"]["arrays"]["imputation_mean_ref"]],
+            fold_record.final_transform.marker_means,
         )
 
 

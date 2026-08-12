@@ -148,6 +148,47 @@ uv run --frozen --extra gblup \
 
 1 epochの実行は配線と出力契約の確認用であり、予測精度の評価には使用しません。
 
+## 成果物
+
+GBLUP・ResNetは、実行ごとに再現性の追跡・監査に必要な成果物を`<output-dir>/artifacts/<run_id>/`へ保存します（`gblup_results/artifacts/...`・`resnet_results/artifacts/...`）。ルート直下の共通`artifacts/`は使用せず、`docker-compose.yml`の既存bind mount（`./gblup_results`・`./resnet_results`）だけで書き込み先を確保できます。
+
+```text
+gblup_results/
+  oof_predictions.csv        # 既存の互換出力（4列、パス・列名は不変）
+  artifacts/
+    <run_id>/
+      metadata.json          # run_id、git commit、依存バージョン、入力ファイル情報など
+      split.json             # outer（LOFO）split。GBLUPは inner: null
+      preprocessing.json     # 欠損率・MAF等の設定値とfold単位の要約統計
+      preprocessing_arrays.npz  # fold単位の実数値配列（marker mask、imputation mean等）
+      metrics.json           # fold単位・summary単位の指標
+      predictions.csv        # oof_predictions.csvと同一内容（run単位で自己完結させるための複製）
+```
+
+`resnet_results/artifacts/<run_id>/`も同じ6ファイル構成です。`split.json`の`inner`にはResNet固有のvalidation family選択（`validation_family_selection`）が入り、`preprocessing.json`のfoldエントリには`selection_transform`（epoch選択用）と`final_transform`（best epoch決定後の再fit用）の2種類が別々に記録されます。
+
+各JSONファイルは`schema_version`を持ち、将来のフィールド追加・変更を安全に検出できるようにしています（現在は`1`）。
+
+### split.jsonとouter_split_hash
+
+`split.json`の`outer.outer_split_hash`は、`ordered_samples`（sample ID・family IDの対応、順序を保持）と`folds`（LOFOの各foldでのtrain/test family）だけから計算したSHA-256です。GBLUPとResNetが同じ`data/`を読んだ場合、この値は完全に一致します。異なればsplitが揃っていないことを意味します。ResNetのinner split（validation family選択のseed等）はこのhashの計算に含まれません。
+
+### 前処理値の実体
+
+閾値や件数などのスカラー値は`preprocessing.json`に、fold単位で実際にfitされた配列（marker mask、imputation mean、標準化のmean/scale、PCAのmean/components/explained varianceなど）は`preprocessing_arrays.npz`に保存します。`preprocessing.json`の各fold・各transformエントリの`arrays`オブジェクトが、対応するNPZ内の配列名（`*_ref`）を指します。入力genotype/phenotypeデータそのものは複製しません。
+
+### run_idと上書き防止
+
+`run_id`は`<UTC時刻>-<UUID4先頭8文字>`形式です（例: `20260812T123456Z-a1b2c3d4`）。既に存在する`run_id`のディレクトリへは書き込めません。書き込みは一時ディレクトリで行い、全ファイルの書き込みが成功した後にのみ最終ディレクトリへ切り替えるため、途中で失敗した場合に不完全なrunディレクトリが残ることはありません。既存の`oof_predictions.csv`は、run成果物の確定後にのみ置き換えます。
+
+### git commitの取得
+
+`metadata.json`の`git_commit`はベストエフォートです。Dockerイメージは`.dockerignore`で`.git/`をビルドコンテキストから除外しているため、コンテナ内で実行した場合は取得できず`null`になります。明示的に記録したい場合は、実行前に環境変数`GIT_COMMIT_SHA`を設定してください（`git`コマンドより優先されます）。
+
+### 未対応（Issue #6予定）
+
+`split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）やCLIオプションは、本Issue #5では追加していません。Issue #6（GPU本実験・GBLUP/ResNet比較）で対応予定です。
+
 ## Docker / Docker Compose
 
 `Dockerfile`は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
@@ -212,18 +253,18 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 | `observed_yield_kg_ha` | 観測収量 |
 | `predicted_yield_kg_ha` | held-out familyに対するOOF予測 |
 
-モデル比較では同一sample・同一splitのOOF予測を使用し、fold単位のPearson相関、macro family相関、pooled OOF相関、RMSEなどを目的に応じて明示します。
+モデル比較では同一sample・同一splitのOOF予測を使用し、fold単位のPearson相関、macro family相関、pooled OOF相関、RMSEなどを目的に応じて明示します。この4列は`<output-dir>/oof_predictions.csv`と、[成果物](#成果物)節で説明する`<output-dir>/artifacts/<run_id>/predictions.csv`の両方で同一です。
 
 ## テストとCI
 
 ```bash
 uv run --frozen --extra gblup \
   ruff format --check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
 
 uv run --frozen --extra gblup \
   ruff check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
 
 uv run --frozen --extra gblup pytest -q
 ```
@@ -233,7 +274,7 @@ GitHub Actionsでは、対象コードのformat/lint、単体テストスイー�
 ## 既知の制約
 
 - GBLUPはdata directory、出力先、16 familyをCLIで変更できません（Docker Composeの`gblup`サービスも同じ制約を継承します）。
-- split、marker filter、imputation、PCA、選択epochを機械可読な成果物として保存していません。
+- `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
 - `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。

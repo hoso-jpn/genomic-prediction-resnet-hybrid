@@ -8,6 +8,7 @@ computed from the training families independently in every LOFO fold.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,9 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
-from soynam_data import load_soynam_dataset
+import run_manifest
+import soynam_data
+from soynam_data import list_family_files, load_soynam_dataset
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -324,11 +327,136 @@ def compute_rmse(observed: FloatArray, predicted: FloatArray) -> float:
     return float(np.sqrt(np.mean((observed_values - predicted_values) ** 2)))
 
 
+def build_fold_preprocessing_record(
+    fold_index: int,
+    held_out_family: str,
+    relationships: FoldRelationships,
+) -> tuple[dict[str, Any], dict[str, FloatArray]]:
+    """Build one fold's preprocessing.json entry and its NPZ-backed arrays.
+
+    Reuses the training-derived statistics already computed by
+    ``prepare_fold_relationships`` without recomputing or altering them.
+    """
+    prefix = f"fold_{fold_index:03d}"
+    allele_frequency = (relationships.marker_means + 1.0) / 2.0
+    arrays: dict[str, FloatArray] = {
+        f"{prefix}_marker_mask": relationships.retained_markers,
+        f"{prefix}_imputation_mean": relationships.marker_means,
+        f"{prefix}_allele_frequency": allele_frequency,
+        f"{prefix}_observed_rate": relationships.observed_rates,
+    }
+    record = {
+        "fold_index": fold_index,
+        "held_out_family": held_out_family,
+        "total_marker_count": int(relationships.retained_markers.size),
+        "retained_marker_count": int(relationships.retained_markers.sum()),
+        "denominator": float(relationships.denominator),
+        "arrays": {
+            "marker_mask_ref": f"{prefix}_marker_mask",
+            "imputation_mean_ref": f"{prefix}_imputation_mean",
+            "allele_frequency_ref": f"{prefix}_allele_frequency",
+            "observed_rate_ref": f"{prefix}_observed_rate",
+        },
+    }
+    return record, arrays
+
+
+def save_run_artifacts(
+    *,
+    data_dir: Path,
+    output_dir: Path,
+    dataset: Any,
+    predictions_frame: pd.DataFrame,
+    fold_preprocessing_records: list[dict[str, Any]],
+    preprocessing_arrays: dict[str, FloatArray],
+    fold_metric_records: list[dict[str, Any]],
+    macro_correlation: float,
+    pooled_correlation: float,
+    pooled_rmse: float,
+) -> Path:
+    """Assemble this run's metadata/split/preprocessing/metrics and write them."""
+    families = sorted({str(family_id) for family_id in dataset.family_ids})
+    split = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "outer": run_manifest.build_outer_split(
+            dataset.sample_names.tolist(), dataset.family_ids.tolist()
+        ),
+        "inner": None,
+    }
+    preprocessing = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "model": "gblup",
+        "config": {
+            "min_observed_rate": MIN_OBSERVED_RATE,
+            "maf_threshold": MAF_THRESHOLD,
+            "imputation": "training_mean",
+            "relationship": "VanRaden-1",
+            "total_marker_count": int(dataset.genotypes.shape[1]),
+        },
+        "folds": fold_preprocessing_records,
+    }
+    metrics = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "model": "gblup",
+        "folds": fold_metric_records,
+        "summary": {
+            "macro_family_r": macro_correlation,
+            "pooled_r": pooled_correlation,
+            "pooled_rmse": pooled_rmse,
+        },
+    }
+
+    run_id = run_manifest.new_run_id()
+    source_files = [
+        Path(__file__),
+        Path(soynam_data.__file__),
+        Path(run_manifest.__file__),
+    ]
+    metadata = {
+        "schema_version": run_manifest.SCHEMA_VERSION,
+        "run_id": run_id,
+        "created_at": run_manifest.utc_now_iso(),
+        "model_name": "gblup",
+        "git_commit": run_manifest.git_commit_sha(),
+        "source_file_checksums": run_manifest.source_file_checksums(source_files),
+        "command": run_manifest.sanitize_command(Path(sys.argv[0]).name, sys.argv[1:]),
+        "seed": None,
+        "python_version": run_manifest.python_version(),
+        "library_versions": run_manifest.library_versions(
+            ["numpy", "pandas", "scikit-learn", "scipy"]
+        ),
+        "hyperparameters": {
+            "min_observed_rate": MIN_OBSERVED_RATE,
+            "maf_threshold": MAF_THRESHOLD,
+            "relationship": "VanRaden-1",
+        },
+        "input_files": run_manifest.describe_input_files(list_family_files(data_dir)),
+        "families": families,
+        "split_ref": "split.json",
+        "preprocessing_ref": "preprocessing.json",
+        "preprocessing_arrays_ref": "preprocessing_arrays.npz",
+        "metrics_ref": "metrics.json",
+        "predictions_ref": "predictions.csv",
+    }
+
+    return run_manifest.write_run_artifacts(
+        output_dir=output_dir,
+        run_id=run_id,
+        metadata=metadata,
+        split=split,
+        preprocessing=preprocessing,
+        preprocessing_arrays=preprocessing_arrays,
+        metrics=metrics,
+        predictions=predictions_frame,
+    )
+
+
 def main() -> None:
     """Execute family-wise LOFO cross-validation."""
     import wandb
 
-    dataset = load_soynam_dataset("data")
+    data_dir = Path("data")
+    dataset = load_soynam_dataset(data_dir)
     splitter = LeaveOneGroupOut()
     total_folds = splitter.get_n_splits(
         dataset.genotypes, dataset.phenotypes, dataset.family_ids
@@ -359,6 +487,9 @@ def main() -> None:
     oof_predictions = np.full(dataset.phenotypes.size, np.nan, dtype=np.float64)
     fold_correlations: list[float] = []
     fold_count = 0
+    fold_preprocessing_records: list[dict[str, Any]] = []
+    preprocessing_arrays: dict[str, FloatArray] = {}
+    fold_metric_records: list[dict[str, Any]] = []
 
     for fold_index, (train_indices, test_indices) in enumerate(
         splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
@@ -399,6 +530,20 @@ def main() -> None:
             }
         )
 
+        fold_record, fold_arrays = build_fold_preprocessing_record(
+            fold_index, family_label, relationships
+        )
+        fold_preprocessing_records.append(fold_record)
+        preprocessing_arrays.update(fold_arrays)
+        fold_metric_records.append(
+            {
+                "fold_index": fold_index,
+                "held_out_family": family_label,
+                "pearson_r": correlation,
+                "rmse": rmse,
+            }
+        )
+
     if fold_count != total_folds or not np.isfinite(oof_predictions).all():
         raise RuntimeError(
             f"LOFO-CV incomplete: {fold_count}/{total_folds} folds succeeded"
@@ -410,16 +555,27 @@ def main() -> None:
     )
     pooled_rmse = compute_rmse(dataset.phenotypes, oof_predictions)
 
-    output_dir = Path("gblup_results")
-    output_dir.mkdir(exist_ok=True)
-    pd.DataFrame(
+    predictions_frame = pd.DataFrame(
         {
             "family_id": dataset.family_ids,
             "sample_name": dataset.sample_names,
             "observed_yield_kg_ha": dataset.phenotypes,
             "predicted_yield_kg_ha": oof_predictions,
         }
-    ).to_csv(output_dir / "oof_predictions.csv", index=False)
+    )
+    run_dir = save_run_artifacts(
+        data_dir=data_dir,
+        output_dir=Path("gblup_results"),
+        dataset=dataset,
+        predictions_frame=predictions_frame,
+        fold_preprocessing_records=fold_preprocessing_records,
+        preprocessing_arrays=preprocessing_arrays,
+        fold_metric_records=fold_metric_records,
+        macro_correlation=macro_correlation,
+        pooled_correlation=pooled_correlation,
+        pooled_rmse=pooled_rmse,
+    )
+    print(f"run artifacts:             {run_dir}")
 
     print(f"\n{'=' * 58}")
     print(f"GBLUP LOFO macro family r: {macro_correlation:.4f}")

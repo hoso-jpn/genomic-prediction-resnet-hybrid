@@ -104,6 +104,17 @@ def _pair_family_files(data_dir: Path) -> list[tuple[str, Path, Path]]:
     ]
 
 
+def list_family_files(data_dir: str | Path = "data") -> list[tuple[str, Path, Path]]:
+    """List the validated (family_id, phenotype_path, genotype_path) triples.
+
+    Reuses the same file-pairing and collision checks as
+    ``load_soynam_dataset`` so callers (e.g. run manifest builders) never
+    re-derive which files were actually read from a second, divergent code
+    path.
+    """
+    return _pair_family_files(Path(data_dir))
+
+
 def _strip_identifiers(values: list[object]) -> list[str]:
     """Strip identifiers, mapping missing values to an empty string."""
     stripped: list[str] = []

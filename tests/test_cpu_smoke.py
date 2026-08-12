@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -7,6 +8,35 @@ import numpy as np
 import pandas as pd
 
 from soynam_data import GENOTYPE_SUFFIX, PHENOTYPE_SUFFIX
+
+REQUIRED_ARTIFACT_FILES = (
+    "metadata.json",
+    "split.json",
+    "preprocessing.json",
+    "preprocessing_arrays.npz",
+    "metrics.json",
+    "predictions.csv",
+)
+REQUIRED_METADATA_KEYS = (
+    "schema_version",
+    "run_id",
+    "created_at",
+    "model_name",
+    "git_commit",
+    "source_file_checksums",
+    "command",
+    "seed",
+    "python_version",
+    "library_versions",
+    "hyperparameters",
+    "input_files",
+    "families",
+    "split_ref",
+    "preprocessing_ref",
+    "preprocessing_arrays_ref",
+    "metrics_ref",
+    "predictions_ref",
+)
 
 
 def _write_synthetic_family(
@@ -136,3 +166,48 @@ def test_resnet_cli_cpu_smoke(tmp_path: Path) -> None:
             ]
         ].to_numpy()
     ).all()
+
+    # No W&B credentials were set in `environment`, and none were required
+    # above: the run artifacts below are written by run_manifest.py alone.
+    run_dirs = sorted((output_dir / "artifacts").iterdir())
+    assert len(run_dirs) == 1, result.stdout + result.stderr
+    run_dir = run_dirs[0]
+
+    for name in REQUIRED_ARTIFACT_FILES:
+        assert (run_dir / name).is_file(), name
+
+    metadata = json.loads((run_dir / "metadata.json").read_text())
+    for key in REQUIRED_METADATA_KEYS:
+        assert key in metadata, key
+    assert metadata["model_name"] == "resnet"
+    assert metadata["run_id"] == run_dir.name
+    assert len(metadata["families"]) == 3
+
+    split = json.loads((run_dir / "split.json").read_text())
+    assert split["outer"]["strategy"] == "leave_one_family_out"
+    assert len(split["outer"]["folds"]) == 3
+    assert split["inner"]["strategy"] == "validation_family_selection"
+
+    preprocessing = json.loads((run_dir / "preprocessing.json").read_text())
+    assert len(preprocessing["folds"]) == 3
+    first_fold = preprocessing["folds"][0]
+    assert "selection_transform" in first_fold
+    assert "final_transform" in first_fold
+
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    assert len(metrics["folds"]) == 3
+
+    with np.load(run_dir / "preprocessing_arrays.npz") as arrays:
+        selection_ref = first_fold["selection_transform"]["arrays"]["marker_mask_ref"]
+        final_ref = first_fold["final_transform"]["arrays"]["marker_mask_ref"]
+        assert selection_ref in arrays
+        assert final_ref in arrays
+
+    run_predictions = pd.read_csv(run_dir / "predictions.csv")
+    assert run_predictions.columns.tolist() == [
+        "family_id",
+        "sample_name",
+        "observed_yield_kg_ha",
+        "predicted_yield_kg_ha",
+    ]
+    assert len(run_predictions) == len(output)
