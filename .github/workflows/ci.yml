@@ -65,3 +65,38 @@ jobs:
         run: >
           uv run --frozen --extra gblup
           pytest -q tests/test_cpu_smoke.py
+
+  docker-smoke:
+    name: Docker Compose build and smoke (verified path only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build verified images (unit-test, cpu-smoke)
+        run: docker compose build unit-test cpu-smoke
+
+      - name: Run unit tests in container
+        run: docker compose run --rm unit-test
+
+      - name: Run CPU smoke test in container
+        run: docker compose run --rm cpu-smoke
+
+      - name: Verify source is present in the image without a bind mount
+        run: >
+          docker compose run --rm unit-test
+          bash -c "test -f /workspace/soynam_data.py &&
+          test -f /workspace/gblup_baseline.py &&
+          test -f /workspace/resnet_baseline.py &&
+          test -d /workspace/tests"
+
+      - name: Verify the image does not depend on rpy2/R
+        run: >
+          docker compose run --rm unit-test
+          python -c "import importlib.util, sys;
+          sys.exit(0 if importlib.util.find_spec('rpy2') is None else 1)"
