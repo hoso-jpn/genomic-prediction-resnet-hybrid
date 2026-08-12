@@ -61,7 +61,9 @@ class FeatureTransform:
 @dataclass(frozen=True)
 class ResnetFoldRecord:
     """Everything recorded about one outer fold: split assignment, the two
-    feature transforms fitted within it, and its fold-level metric."""
+    feature transforms fitted within it, the two target standardizations
+    used to train and invert each stage's predictions, and its fold-level
+    metric."""
 
     fold_index: int
     held_out_family: str
@@ -69,7 +71,11 @@ class ResnetFoldRecord:
     fold_seed: int
     best_epoch: int
     selection_transform: FeatureTransform
+    selection_target_mean: float
+    selection_target_scale: float
     final_transform: FeatureTransform
+    final_target_mean: float
+    final_target_scale: float
     correlation: float
 
 
@@ -246,7 +252,7 @@ def _select_epoch(
     config: ResNetConfig,
     seed: int,
     device: torch.device,
-) -> tuple[int, FeatureTransform]:
+) -> tuple[int, FeatureTransform, float, float]:
     transform = fit_feature_transform(fit_x, config, seed)
     fit_snps, fit_pcs = transform_features(fit_x, transform)
     validation_snps, validation_pcs = transform_features(validation_x, transform)
@@ -279,7 +285,7 @@ def _select_epoch(
             stale_epochs += 1
             if stale_epochs >= config.patience:
                 break
-    return best_epoch, transform
+    return best_epoch, transform, target_mean, target_scale
 
 
 def predict_resnet_fold(
@@ -301,14 +307,16 @@ def predict_resnet_fold(
     fit_indices = train_indices[~validation_mask]
     validation_indices = train_indices[validation_mask]
     fold_seed = config.seed + fold_index * 100
-    best_epoch, selection_transform = _select_epoch(
-        genotypes[fit_indices],
-        phenotypes[fit_indices],
-        genotypes[validation_indices],
-        phenotypes[validation_indices],
-        config,
-        fold_seed,
-        device,
+    best_epoch, selection_transform, selection_target_mean, selection_target_scale = (
+        _select_epoch(
+            genotypes[fit_indices],
+            phenotypes[fit_indices],
+            genotypes[validation_indices],
+            phenotypes[validation_indices],
+            config,
+            fold_seed,
+            device,
+        )
     )
 
     final_transform = fit_feature_transform(
@@ -318,10 +326,10 @@ def predict_resnet_fold(
         genotypes[train_indices], final_transform
     )
     test_snps, test_pcs = transform_features(genotypes[test_indices], final_transform)
-    target_mean, target_scale = _target_scale(phenotypes[train_indices])
-    train_targets = ((phenotypes[train_indices] - target_mean) / target_scale).astype(
-        np.float32
-    )
+    final_target_mean, final_target_scale = _target_scale(phenotypes[train_indices])
+    train_targets = (
+        (phenotypes[train_indices] - final_target_mean) / final_target_scale
+    ).astype(np.float32)
 
     seed_everything(fold_seed + 1)
     model = _new_model(train_snps.shape[1], train_pcs.shape[1], config, device)
@@ -334,7 +342,7 @@ def predict_resnet_fold(
     for _ in range(best_epoch):
         _train_epoch(model, loader, optimizer, device)
     standardized = _predict_standardized(model, test_snps, test_pcs, device)
-    predictions = standardized * target_scale + target_mean
+    predictions = standardized * final_target_scale + final_target_mean
     correlation = float(np.corrcoef(phenotypes[test_indices], predictions)[0, 1])
     record = ResnetFoldRecord(
         fold_index=fold_index,
@@ -343,7 +351,11 @@ def predict_resnet_fold(
         fold_seed=fold_seed,
         best_epoch=best_epoch,
         selection_transform=selection_transform,
+        selection_target_mean=selection_target_mean,
+        selection_target_scale=selection_target_scale,
         final_transform=final_transform,
+        final_target_mean=final_target_mean,
+        final_target_scale=final_target_scale,
         correlation=correlation,
     )
     return predictions, record
@@ -395,12 +407,17 @@ def make_oof_frame(dataset: SoynamDataset, predictions: FloatArray) -> pd.DataFr
 
 
 def build_transform_record(
-    prefix: str, transform: FeatureTransform
+    prefix: str,
+    transform: FeatureTransform,
+    *,
+    target_mean: float,
+    target_scale: float,
 ) -> tuple[dict[str, Any], dict[str, FloatArray]]:
     """Build one feature transform's preprocessing entry and NPZ-backed arrays.
 
     Reuses the training-derived statistics and fitted PCA already held by
-    ``FeatureTransform`` without recomputing or altering them.
+    ``FeatureTransform``, plus the target mean/scale used to standardize and
+    invert this stage's predictions, without recomputing or altering them.
     """
     arrays: dict[str, FloatArray] = {
         f"{prefix}_marker_mask": transform.retained_markers,
@@ -417,6 +434,8 @@ def build_transform_record(
         "input_feature_count": int(transform.retained_markers.size),
         "retained_marker_count": int(transform.retained_markers.sum()),
         "output_feature_count": int(transform.pca.n_components_),
+        "target_mean": float(target_mean),
+        "target_scale": float(target_scale),
         "arrays": {
             "marker_mask_ref": f"{prefix}_marker_mask",
             "imputation_mean_ref": f"{prefix}_imputation_mean",
@@ -439,10 +458,16 @@ def build_fold_preprocessing_entry(
     selection_prefix = f"fold_{fold_record.fold_index:03d}_selection"
     final_prefix = f"fold_{fold_record.fold_index:03d}_final"
     selection_record, selection_arrays = build_transform_record(
-        selection_prefix, fold_record.selection_transform
+        selection_prefix,
+        fold_record.selection_transform,
+        target_mean=fold_record.selection_target_mean,
+        target_scale=fold_record.selection_target_scale,
     )
     final_record, final_arrays = build_transform_record(
-        final_prefix, fold_record.final_transform
+        final_prefix,
+        fold_record.final_transform,
+        target_mean=fold_record.final_target_mean,
+        target_scale=fold_record.final_target_scale,
     )
     entry = {
         "fold_index": fold_record.fold_index,
@@ -489,17 +514,46 @@ def build_inner_split(
     }
 
 
+def _device_environment_info(requested: str, resolved: torch.device) -> dict[str, Any]:
+    """Describe the compute device actually used, for reproducibility.
+
+    ``--device auto`` (or an omitted flag) resolves to CPU or CUDA
+    depending on availability at run time; recording both the request and
+    the resolution is the only way to tell which one actually ran.
+    """
+    info: dict[str, Any] = {
+        "device_requested": requested,
+        "device_resolved": str(resolved),
+        "cuda_version": None,
+        "cudnn_version": None,
+    }
+    if resolved.type == "cuda":
+        info["cuda_version"] = torch.version.cuda
+        if torch.backends.cudnn.is_available():
+            info["cudnn_version"] = torch.backends.cudnn.version()
+    return info
+
+
 def save_run_artifacts(
     *,
-    data_dir: Path,
     output_dir: Path,
     dataset: SoynamDataset,
     config: ResNetConfig,
+    device: torch.device,
+    device_requested: str,
     predictions_frame: pd.DataFrame,
     fold_records: list[ResnetFoldRecord],
     command_arguments: list[str],
+    input_files: list[dict[str, str]],
+    source_checksums: dict[str, str],
 ) -> Path:
-    """Assemble this run's metadata/split/preprocessing/metrics and write them."""
+    """Assemble this run's metadata/split/preprocessing/metrics and write them.
+
+    ``input_files`` and ``source_checksums`` must be captured once at the
+    start of the run (before training) and passed in as-is, so the recorded
+    checksums describe what was actually read rather than whatever happens
+    to be on disk when the run finishes.
+    """
     families = sorted({str(family_id) for family_id in dataset.family_ids})
 
     preprocessing_entries = []
@@ -552,19 +606,13 @@ def save_run_artifacts(
     }
 
     run_id = run_manifest.new_run_id()
-    source_files = [
-        Path(__file__),
-        Path(model.__file__),
-        Path(soynam_data.__file__),
-        Path(run_manifest.__file__),
-    ]
     metadata = {
         "schema_version": run_manifest.SCHEMA_VERSION,
         "run_id": run_id,
         "created_at": run_manifest.utc_now_iso(),
         "model_name": "resnet",
-        "git_commit": run_manifest.git_commit_sha(),
-        "source_file_checksums": run_manifest.source_file_checksums(source_files),
+        "git_commit": run_manifest.git_commit_sha(Path(__file__).resolve().parent),
+        "source_file_checksums": source_checksums,
         "command": run_manifest.sanitize_command(
             Path(sys.argv[0]).name, command_arguments
         ),
@@ -574,7 +622,8 @@ def save_run_artifacts(
             ["numpy", "pandas", "scikit-learn", "torch"]
         ),
         "hyperparameters": hyperparameters,
-        "input_files": run_manifest.describe_input_files(list_family_files(data_dir)),
+        **_device_environment_info(device_requested, device),
+        "input_files": input_files,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -625,17 +674,35 @@ def main() -> None:
         batch_size=args.batch_size,
         pca_components=args.pca_components,
     )
-    dataset = load_soynam_dataset(args.data_dir)
+    # Fix the file list and its checksums once, before loading, so metadata
+    # describes exactly what was read rather than whatever is on disk by
+    # the time this (potentially long) run finishes.
+    family_files = list_family_files(args.data_dir)
+    input_files = run_manifest.describe_input_files(family_files)
+    source_checksums = run_manifest.source_file_checksums(
+        [
+            Path(__file__),
+            Path(model.__file__),
+            Path(soynam_data.__file__),
+            Path(run_manifest.__file__),
+        ]
+    )
+
+    dataset = load_soynam_dataset(args.data_dir, family_files=family_files)
     predictions, fold_records = run_lofo(dataset, config, device)
     predictions_frame = make_oof_frame(dataset, predictions)
+    run_manifest.verify_input_files_unchanged(family_files, input_files)
     run_dir = save_run_artifacts(
-        data_dir=args.data_dir,
         output_dir=args.output_dir,
         dataset=dataset,
         config=config,
+        device=device,
+        device_requested=args.device,
         predictions_frame=predictions_frame,
         fold_records=fold_records,
         command_arguments=sys.argv[1:],
+        input_files=input_files,
+        source_checksums=source_checksums,
     )
     print(f"run artifacts: {run_dir}")
 

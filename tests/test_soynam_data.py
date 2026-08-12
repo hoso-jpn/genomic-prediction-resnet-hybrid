@@ -98,6 +98,35 @@ class SoynamDataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pairing is invalid"):
             soynam_data.load_soynam_dataset(data_dir)
 
+    def test_load_with_fixed_family_files_ignores_later_directory_changes(
+        self,
+    ) -> None:
+        data_dir = self._make_data_dir()
+        self._write_standard_family(
+            data_dir, "Parent-A_NAM01", ["RIL-1", "RIL-2"], ["m1", "m2"]
+        )
+
+        fixed_family_files = soynam_data.list_family_files(data_dir)
+
+        # A family added after the file list was fixed must not appear when
+        # that fixed list is passed back in: the caller's earlier resolution
+        # (and any checksums computed from it) stays authoritative.
+        self._write_standard_family(data_dir, "Parent-B_NAM02", ["RIL-3"], ["m1", "m2"])
+
+        dataset = soynam_data.load_soynam_dataset(
+            data_dir, family_files=fixed_family_files
+        )
+        self.assertEqual(dataset.sample_names.tolist(), ["RIL-1", "RIL-2"])
+        self.assertEqual(sorted(set(dataset.family_ids.tolist())), ["Parent-A_NAM01"])
+
+        # Without a fixed list, the loader re-resolves the directory and
+        # picks up the family that was added afterward.
+        rescanned = soynam_data.load_soynam_dataset(data_dir)
+        self.assertEqual(
+            sorted(set(rescanned.family_ids.tolist())),
+            ["Parent-A_NAM01", "Parent-B_NAM02"],
+        )
+
     def test_loads_multiple_families(self) -> None:
         data_dir = self._make_data_dir()
         self._write_standard_family(

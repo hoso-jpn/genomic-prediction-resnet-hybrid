@@ -363,7 +363,6 @@ def build_fold_preprocessing_record(
 
 def save_run_artifacts(
     *,
-    data_dir: Path,
     output_dir: Path,
     dataset: Any,
     predictions_frame: pd.DataFrame,
@@ -373,8 +372,16 @@ def save_run_artifacts(
     macro_correlation: float,
     pooled_correlation: float,
     pooled_rmse: float,
+    input_files: list[dict[str, str]],
+    source_checksums: dict[str, str],
 ) -> Path:
-    """Assemble this run's metadata/split/preprocessing/metrics and write them."""
+    """Assemble this run's metadata/split/preprocessing/metrics and write them.
+
+    ``input_files`` and ``source_checksums`` must be captured once at the
+    start of the run (before training) and passed in as-is, so the recorded
+    checksums describe what was actually read rather than whatever happens
+    to be on disk when the run finishes.
+    """
     families = sorted({str(family_id) for family_id in dataset.family_ids})
     split = {
         "schema_version": run_manifest.SCHEMA_VERSION,
@@ -407,18 +414,13 @@ def save_run_artifacts(
     }
 
     run_id = run_manifest.new_run_id()
-    source_files = [
-        Path(__file__),
-        Path(soynam_data.__file__),
-        Path(run_manifest.__file__),
-    ]
     metadata = {
         "schema_version": run_manifest.SCHEMA_VERSION,
         "run_id": run_id,
         "created_at": run_manifest.utc_now_iso(),
         "model_name": "gblup",
-        "git_commit": run_manifest.git_commit_sha(),
-        "source_file_checksums": run_manifest.source_file_checksums(source_files),
+        "git_commit": run_manifest.git_commit_sha(Path(__file__).resolve().parent),
+        "source_file_checksums": source_checksums,
         "command": run_manifest.sanitize_command(Path(sys.argv[0]).name, sys.argv[1:]),
         "seed": None,
         "python_version": run_manifest.python_version(),
@@ -430,7 +432,7 @@ def save_run_artifacts(
             "maf_threshold": MAF_THRESHOLD,
             "relationship": "VanRaden-1",
         },
-        "input_files": run_manifest.describe_input_files(list_family_files(data_dir)),
+        "input_files": input_files,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -456,7 +458,16 @@ def main() -> None:
     import wandb
 
     data_dir = Path("data")
-    dataset = load_soynam_dataset(data_dir)
+    # Fix the file list and its checksums once, before loading, so metadata
+    # describes exactly what was read rather than whatever is on disk by
+    # the time this (potentially long) run finishes.
+    family_files = list_family_files(data_dir)
+    input_files = run_manifest.describe_input_files(family_files)
+    source_checksums = run_manifest.source_file_checksums(
+        [Path(__file__), Path(soynam_data.__file__), Path(run_manifest.__file__)]
+    )
+
+    dataset = load_soynam_dataset(data_dir, family_files=family_files)
     splitter = LeaveOneGroupOut()
     total_folds = splitter.get_n_splits(
         dataset.genotypes, dataset.phenotypes, dataset.family_ids
@@ -563,8 +574,8 @@ def main() -> None:
             "predicted_yield_kg_ha": oof_predictions,
         }
     )
+    run_manifest.verify_input_files_unchanged(family_files, input_files)
     run_dir = save_run_artifacts(
-        data_dir=data_dir,
         output_dir=Path("gblup_results"),
         dataset=dataset,
         predictions_frame=predictions_frame,
@@ -574,6 +585,8 @@ def main() -> None:
         macro_correlation=macro_correlation,
         pooled_correlation=pooled_correlation,
         pooled_rmse=pooled_rmse,
+        input_files=input_files,
+        source_checksums=source_checksums,
     )
     print(f"run artifacts:             {run_dir}")
 

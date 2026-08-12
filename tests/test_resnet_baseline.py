@@ -1,10 +1,12 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
 
 from resnet_baseline import (
     ResNetConfig,
+    _device_environment_info,
     build_fold_preprocessing_entry,
     build_transform_record,
     fit_feature_transform,
@@ -131,7 +133,9 @@ class ResNetBaselineTest(unittest.TestCase):
         )
         transform = fit_feature_transform(train, config, seed=7)
 
-        record, arrays = build_transform_record("fold_000_final", transform)
+        record, arrays = build_transform_record(
+            "fold_000_final", transform, target_mean=3300.0, target_scale=125.0
+        )
 
         self.assertEqual(
             record["input_feature_count"], int(transform.retained_markers.size)
@@ -140,6 +144,8 @@ class ResNetBaselineTest(unittest.TestCase):
             record["retained_marker_count"], int(transform.retained_markers.sum())
         )
         self.assertEqual(record["output_feature_count"], transform.pca.n_components_)
+        self.assertEqual(record["target_mean"], 3300.0)
+        self.assertEqual(record["target_scale"], 125.0)
         np.testing.assert_array_equal(
             arrays["fold_000_final_marker_mask"], transform.retained_markers
         )
@@ -225,6 +231,101 @@ class ResNetBaselineTest(unittest.TestCase):
             arrays[entry["final_transform"]["arrays"]["imputation_mean_ref"]],
             fold_record.final_transform.marker_means,
         )
+
+    def test_fold_record_captures_target_standardization_per_stage(self) -> None:
+        family_ids = np.asarray(["A"] * 4 + ["B"] * 4 + ["C"] * 4)
+        genotypes = np.asarray(
+            [[0.0, 0.0]] * 4
+            + [[-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [1.0, 1.0]]
+            + [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [-1.0, -1.0]],
+            dtype=np.float64,
+        )
+        phenotypes = np.arange(12, dtype=np.float64)
+        test_indices = np.flatnonzero(family_ids == "A")
+        train_indices = np.flatnonzero(family_ids != "A")
+        config = ResNetConfig(
+            hidden_dim=4,
+            num_blocks=1,
+            dropout_rate=0.0,
+            pca_components=1,
+            batch_size=4,
+            max_epochs=1,
+            patience=1,
+            min_observed_rate=1.0,
+            maf_threshold=0.0,
+            seed=42,
+        )
+
+        _, fold_record = predict_resnet_fold(
+            genotypes,
+            phenotypes,
+            family_ids,
+            train_indices,
+            test_indices,
+            0,
+            config,
+            torch.device("cpu"),
+        )
+
+        # Independently reconstruct which samples fed each stage's target
+        # standardization, so the assertions below check real agreement
+        # with the computation, not a value copied from the implementation.
+        validation_mask = family_ids[train_indices] == fold_record.validation_family
+        fit_indices = train_indices[~validation_mask]
+        expected_selection_mean = float(np.mean(phenotypes[fit_indices]))
+        expected_selection_scale = float(np.std(phenotypes[fit_indices]))
+        expected_final_mean = float(np.mean(phenotypes[train_indices]))
+        expected_final_scale = float(np.std(phenotypes[train_indices]))
+
+        self.assertAlmostEqual(
+            fold_record.selection_target_mean, expected_selection_mean
+        )
+        self.assertAlmostEqual(
+            fold_record.selection_target_scale, expected_selection_scale
+        )
+        self.assertAlmostEqual(fold_record.final_target_mean, expected_final_mean)
+        self.assertAlmostEqual(fold_record.final_target_scale, expected_final_scale)
+        self.assertNotEqual(
+            fold_record.selection_target_mean, fold_record.final_target_mean
+        )
+
+        entry, _ = build_fold_preprocessing_entry(fold_record)
+        self.assertEqual(
+            entry["selection_transform"]["target_mean"],
+            fold_record.selection_target_mean,
+        )
+        self.assertEqual(
+            entry["selection_transform"]["target_scale"],
+            fold_record.selection_target_scale,
+        )
+        self.assertEqual(
+            entry["final_transform"]["target_mean"], fold_record.final_target_mean
+        )
+        self.assertEqual(
+            entry["final_transform"]["target_scale"], fold_record.final_target_scale
+        )
+
+    def test_device_environment_info_for_cpu(self) -> None:
+        info = _device_environment_info("cpu", torch.device("cpu"))
+        self.assertEqual(info["device_requested"], "cpu")
+        self.assertEqual(info["device_resolved"], "cpu")
+        self.assertIsNone(info["cuda_version"])
+        self.assertIsNone(info["cudnn_version"])
+
+    def test_device_environment_info_for_cuda_without_cudnn(self) -> None:
+        with mock.patch("torch.backends.cudnn.is_available", return_value=False):
+            info = _device_environment_info("auto", torch.device("cuda"))
+        self.assertEqual(info["device_requested"], "auto")
+        self.assertEqual(info["device_resolved"], "cuda")
+        self.assertIsNone(info["cudnn_version"])
+
+    def test_device_environment_info_for_cuda_with_cudnn(self) -> None:
+        with (
+            mock.patch("torch.backends.cudnn.is_available", return_value=True),
+            mock.patch("torch.backends.cudnn.version", return_value=8900),
+        ):
+            info = _device_environment_info("cuda", torch.device("cuda"))
+        self.assertEqual(info["cudnn_version"], 8900)
 
 
 if __name__ == "__main__":

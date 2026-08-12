@@ -87,6 +87,35 @@ class ChecksumTest(unittest.TestCase):
             serialized = json.dumps(entry)
             self.assertNotIn(str(data_dir), serialized)
 
+    def test_verify_input_files_unchanged_accepts_matching_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_dir = Path(temporary_directory)
+            phenotype_path = data_dir / "A_NAM01_phenotype_data.tsv.gz"
+            genotype_path = data_dir / "A_NAM01_4312_SNP_genotype_Wm82.a1.tsv.gz"
+            phenotype_path.write_bytes(b"phenotype")
+            genotype_path.write_bytes(b"genotype")
+            family_files = [("A_NAM01", phenotype_path, genotype_path)]
+            expected = run_manifest.describe_input_files(family_files)
+
+            run_manifest.verify_input_files_unchanged(family_files, expected)
+
+    def test_verify_input_files_unchanged_rejects_content_modified_in_place(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_dir = Path(temporary_directory)
+            phenotype_path = data_dir / "A_NAM01_phenotype_data.tsv.gz"
+            genotype_path = data_dir / "A_NAM01_4312_SNP_genotype_Wm82.a1.tsv.gz"
+            phenotype_path.write_bytes(b"phenotype")
+            genotype_path.write_bytes(b"genotype")
+            family_files = [("A_NAM01", phenotype_path, genotype_path)]
+            expected = run_manifest.describe_input_files(family_files)
+
+            phenotype_path.write_bytes(b"phenotype-changed-mid-run")
+
+            with self.assertRaises(RuntimeError):
+                run_manifest.verify_input_files_unchanged(family_files, expected)
+
 
 class GitCommitTest(unittest.TestCase):
     def test_environment_variable_takes_priority(self) -> None:
@@ -115,6 +144,35 @@ class GitCommitTest(unittest.TestCase):
             mock.patch("run_manifest.subprocess.run", return_value=completed),
         ):
             self.assertIsNone(run_manifest.git_commit_sha())
+
+    def test_uses_the_given_repo_dir_as_the_subprocess_cwd(self) -> None:
+        completed = mock.Mock(returncode=0, stdout="deadbeefcafef00d\n")
+        environment = dict(os.environ)
+        environment.pop("GIT_COMMIT_SHA", None)
+        other_repo_dir = Path("/some/other/checkout")
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch("run_manifest.subprocess.run", return_value=completed) as run,
+        ):
+            resolved = run_manifest.git_commit_sha(other_repo_dir)
+        self.assertEqual(resolved, "deadbeefcafef00d")
+        self.assertEqual(run.call_args.kwargs["cwd"], other_repo_dir)
+
+    def test_does_not_default_to_the_process_working_directory(self) -> None:
+        # Two distinct repo_dir values must produce two distinct subprocess
+        # invocations, never silently falling back to the caller's cwd (which
+        # would risk recording an unrelated repository's commit SHA).
+        completed = mock.Mock(returncode=0, stdout="unrelated-sha\n")
+        environment = dict(os.environ)
+        environment.pop("GIT_COMMIT_SHA", None)
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch("run_manifest.subprocess.run", return_value=completed) as run,
+        ):
+            run_manifest.git_commit_sha(Path("/repo/a"))
+            run_manifest.git_commit_sha(Path("/repo/b"))
+        cwd_values = [call.kwargs["cwd"] for call in run.call_args_list]
+        self.assertEqual(cwd_values, [Path("/repo/a"), Path("/repo/b")])
 
 
 class LibraryVersionsTest(unittest.TestCase):
@@ -443,6 +501,25 @@ class WriteRunArtifactsTest(unittest.TestCase):
             run_dir = self._write(output_dir, run_id)
             self.assertTrue(run_dir.is_dir())
 
+    def test_rename_failure_leaves_no_temp_or_final_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            run_id = "20260812T000000Z-ffffffff"
+            with (
+                mock.patch.object(Path, "rename", side_effect=OSError("rename failed")),
+                self.assertRaises(OSError),
+            ):
+                self._write(output_dir, run_id)
+
+            artifacts_dir = output_dir / "artifacts"
+            self.assertFalse((artifacts_dir / run_id).exists())
+            self.assertFalse((artifacts_dir / f".tmp-{run_id}").exists())
+            self.assertFalse((output_dir / "oof_predictions.csv").exists())
+
+            # A subsequent attempt (with rename un-mocked) must still succeed.
+            run_dir = self._write(output_dir, run_id)
+            self.assertTrue(run_dir.is_dir())
+
     def test_second_run_atomically_replaces_the_compat_csv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -486,7 +563,38 @@ class WriteRunArtifactsTest(unittest.TestCase):
 
             compat = pd.read_csv(output_dir / "oof_predictions.csv")
             self.assertEqual(compat["sample_name"].tolist(), ["s2"])
-            self.assertEqual(list(output_dir.glob(".oof_predictions.csv.tmp")), [])
+            self.assertEqual(list(output_dir.glob("*.tmp")), [])
+
+
+class AtomicWriteCsvTest(unittest.TestCase):
+    def test_temp_path_is_unique_per_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "oof_predictions.csv"
+            frame = pd.DataFrame({"a": [1]})
+            observed_tmp_paths: list[Path] = []
+            original_replace = os.replace
+
+            def _capture_replace(src: object, dst: object) -> None:
+                observed_tmp_paths.append(Path(str(src)))
+                original_replace(src, dst)
+
+            with mock.patch("run_manifest.os.replace", side_effect=_capture_replace):
+                run_manifest._atomic_write_csv(path, frame, "run-a")
+                run_manifest._atomic_write_csv(path, frame, "run-b")
+
+            self.assertEqual(len(observed_tmp_paths), 2)
+            self.assertNotEqual(observed_tmp_paths[0], observed_tmp_paths[1])
+            self.assertIn("run-a", observed_tmp_paths[0].name)
+            self.assertIn("run-b", observed_tmp_paths[1].name)
+
+    def test_temp_file_is_removed_when_to_csv_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "oof_predictions.csv"
+            frame = mock.Mock()
+            frame.to_csv.side_effect = RuntimeError("disk full")
+            with self.assertRaises(RuntimeError):
+                run_manifest._atomic_write_csv(path, frame, "run-x")
+            self.assertEqual(list(Path(temporary_directory).glob("*.tmp")), [])
 
 
 if __name__ == "__main__":

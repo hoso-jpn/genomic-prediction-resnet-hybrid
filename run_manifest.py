@@ -82,6 +82,27 @@ def describe_input_files(
     ]
 
 
+def verify_input_files_unchanged(
+    family_files: Sequence[tuple[str, Path, Path]],
+    expected: list[dict[str, str]],
+) -> None:
+    """Re-checksum the same files and raise if any changed since first read.
+
+    ``expected`` should be the ``describe_input_files`` result captured
+    before loading. This only catches a change to the same on-disk file
+    paths (content replaced in place); it cannot detect files that were
+    added or removed under a differently-resolved directory listing, which
+    is why the file list itself must be fixed once up front rather than
+    re-resolved here.
+    """
+    current = describe_input_files(family_files)
+    if current != expected:
+        raise RuntimeError(
+            "input files changed while the run was in progress; "
+            "re-run against a stable data directory"
+        )
+
+
 def git_commit_sha(repo_dir: Path | None = None) -> str | None:
     """Resolve the current git commit SHA, preferring GIT_COMMIT_SHA, else None.
 
@@ -275,11 +296,22 @@ def write_npz(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
     np.savez_compressed(Path(path), **arrays)
 
 
-def _atomic_write_csv(path: Path, frame: pd.DataFrame) -> None:
+def _atomic_write_csv(path: Path, frame: pd.DataFrame, unique_suffix: str) -> None:
+    """Write a CSV via a same-filesystem temp file, then ``os.replace`` it in.
+
+    ``unique_suffix`` (the run_id) is embedded in the temp filename so two
+    concurrent writers targeting the same ``path`` never share one temp
+    file. The temp file is always removed: a successful ``os.replace``
+    leaves nothing to clean up, and ``unlink(missing_ok=True)`` handles both
+    that case and a failed ``to_csv`` without raising a second error.
+    """
     path = Path(path)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    frame.to_csv(tmp_path, index=False)
-    os.replace(tmp_path, path)
+    tmp_path = path.with_name(f".{path.name}.{unique_suffix}.tmp")
+    try:
+        frame.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def write_run_artifacts(
@@ -321,10 +353,12 @@ def write_run_artifacts(
         write_npz(tmp_dir / "preprocessing_arrays.npz", preprocessing_arrays)
         write_json(tmp_dir / "metrics.json", metrics)
         predictions.to_csv(tmp_dir / "predictions.csv", index=False)
+        tmp_dir.rename(final_dir)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
-    tmp_dir.rename(final_dir)
-    _atomic_write_csv(output_dir / compat_csv_name, predictions)
+    # The run directory above is now complete and public; a failure past
+    # this point only affects the compat CSV refresh, not the run artifacts.
+    _atomic_write_csv(output_dir / compat_csv_name, predictions, run_id)
     return final_dir

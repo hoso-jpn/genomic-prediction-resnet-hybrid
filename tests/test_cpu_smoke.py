@@ -29,6 +29,10 @@ REQUIRED_METADATA_KEYS = (
     "python_version",
     "library_versions",
     "hyperparameters",
+    "device_requested",
+    "device_resolved",
+    "cuda_version",
+    "cudnn_version",
     "input_files",
     "families",
     "split_ref",
@@ -182,6 +186,10 @@ def test_resnet_cli_cpu_smoke(tmp_path: Path) -> None:
     assert metadata["model_name"] == "resnet"
     assert metadata["run_id"] == run_dir.name
     assert len(metadata["families"]) == 3
+    assert metadata["device_requested"] == "cpu"
+    assert metadata["device_resolved"] == "cpu"
+    assert metadata["cuda_version"] is None
+    assert metadata["cudnn_version"] is None
 
     split = json.loads((run_dir / "split.json").read_text())
     assert split["outer"]["strategy"] == "leave_one_family_out"
