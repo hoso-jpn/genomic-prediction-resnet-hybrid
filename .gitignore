@@ -19,7 +19,10 @@ logs/
 .pytest_cache/
 .ruff_cache/
 
-# Model artifacts
+# Model artifacts（生成物。`create_dummy_pretrained_weights.py`で再生成できる）
+# 注: .gitignoreは既に追跡されているファイルには遡及しないため、過去に
+#     追跡されたログ・重みは `git rm --cached` で明示的に追跡を止めている。
+#     詳細は docs/generated-artifacts.md を参照。
 checkpoints/
 *.pt
 *.pth
