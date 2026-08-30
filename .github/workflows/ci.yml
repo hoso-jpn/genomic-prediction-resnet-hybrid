@@ -43,6 +43,7 @@ jobs:
           resnet_baseline.py
           soynam_data.py
           run_manifest.py
+          adzuki_gs_panel_data.py
           tests
 
       - name: Run Ruff
@@ -53,6 +54,7 @@ jobs:
           resnet_baseline.py
           soynam_data.py
           run_manifest.py
+          adzuki_gs_panel_data.py
           tests
 
       - name: Run unit tests
