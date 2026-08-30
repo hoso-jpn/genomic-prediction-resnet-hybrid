@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -514,23 +516,85 @@ def build_inner_split(
     }
 
 
+def _cuda_driver_api_version() -> str | None:
+    """Read the CUDA driver API version (e.g. "12.1"), best-effort.
+
+    This is the CUDA version the installed driver supports, not the
+    display driver number. PyTorch exposes it only through a private
+    helper whose availability differs between builds, so a missing value
+    is recorded as ``None`` rather than failing an otherwise complete run.
+    """
+    getter = getattr(torch._C, "_cuda_getDriverVersion", None)
+    if getter is None:
+        return None
+    try:
+        raw = int(getter())
+    except (RuntimeError, OSError, TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    return f"{raw // 1000}.{(raw % 1000) // 10}"
+
+
+def _nvidia_driver_version() -> str | None:
+    """Read the NVIDIA display driver version via nvidia-smi, best-effort.
+
+    PyTorch does not expose the display driver number, and it is what a
+    GPU environment is actually pinned against, so it is read from
+    nvidia-smi. Never raises: nvidia-smi may be absent even where CUDA
+    runs (or present but unable to talk to the driver), in which case the
+    field stays ``None``.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    first_line = result.stdout.strip().splitlines()
+    if not first_line:
+        return None
+    return first_line[0].strip() or None
+
+
 def _device_environment_info(requested: str, resolved: torch.device) -> dict[str, Any]:
     """Describe the compute device actually used, for reproducibility.
 
     ``--device auto`` (or an omitted flag) resolves to CPU or CUDA
     depending on availability at run time; recording both the request and
-    the resolution is the only way to tell which one actually ran.
+    the resolution is the only way to tell which one actually ran. On CUDA
+    the GPU model, compute capability, drivers, and CUDA/cuDNN versions
+    are recorded too, so a GPU result can be tied to the machine that
+    produced it. ``environment_label`` comes from the ``GPRH_ENVIRONMENT``
+    environment variable, which the CPU and CUDA images set to the pinned
+    dependency environment they were built from.
     """
     info: dict[str, Any] = {
         "device_requested": requested,
         "device_resolved": str(resolved),
         "cuda_version": None,
         "cudnn_version": None,
+        "gpu_name": None,
+        "gpu_compute_capability": None,
+        "cuda_driver_api_version": None,
+        "nvidia_driver_version": None,
+        "environment_label": os.environ.get("GPRH_ENVIRONMENT") or None,
     }
     if resolved.type == "cuda":
         info["cuda_version"] = torch.version.cuda
         if torch.backends.cudnn.is_available():
             info["cudnn_version"] = torch.backends.cudnn.version()
+        properties = torch.cuda.get_device_properties(resolved)
+        info["gpu_name"] = properties.name
+        info["gpu_compute_capability"] = f"{properties.major}.{properties.minor}"
+        info["cuda_driver_api_version"] = _cuda_driver_api_version()
+        info["nvidia_driver_version"] = _nvidia_driver_version()
     return info
 
 
@@ -619,7 +683,7 @@ def save_run_artifacts(
         "seed": config.seed,
         "python_version": run_manifest.python_version(),
         "library_versions": run_manifest.library_versions(
-            ["numpy", "pandas", "scikit-learn", "torch"]
+            ["numpy", "pandas", "scikit-learn", "torch", "torch-geometric"]
         ),
         "hyperparameters": hyperparameters,
         **_device_environment_info(device_requested, device),

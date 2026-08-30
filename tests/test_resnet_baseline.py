@@ -1,3 +1,5 @@
+import os
+import subprocess
 import unittest
 from unittest import mock
 
@@ -6,7 +8,9 @@ import torch
 
 from resnet_baseline import (
     ResNetConfig,
+    _cuda_driver_api_version,
     _device_environment_info,
+    _nvidia_driver_version,
     build_fold_preprocessing_entry,
     build_transform_record,
     fit_feature_transform,
@@ -16,6 +20,14 @@ from resnet_baseline import (
     transform_features,
 )
 from soynam_data import SoynamDataset
+
+
+class _FakeDeviceProperties:
+    """Stand-in for torch.cuda.get_device_properties on a CPU-only machine."""
+
+    name = "Fake GPU"
+    major = 8
+    minor = 6
 
 
 class ResNetBaselineTest(unittest.TestCase):
@@ -311,21 +323,87 @@ class ResNetBaselineTest(unittest.TestCase):
         self.assertEqual(info["device_resolved"], "cpu")
         self.assertIsNone(info["cuda_version"])
         self.assertIsNone(info["cudnn_version"])
+        # GPU-only fields stay absent rather than being filled in with
+        # values borrowed from a device that did not run this job.
+        self.assertIsNone(info["gpu_name"])
+        self.assertIsNone(info["gpu_compute_capability"])
+        self.assertIsNone(info["nvidia_driver_version"])
+
+    def test_device_environment_info_reads_the_environment_label(self) -> None:
+        with mock.patch.dict(os.environ, {"GPRH_ENVIRONMENT": "cuda-12.1"}):
+            info = _device_environment_info("cpu", torch.device("cpu"))
+        self.assertEqual(info["environment_label"], "cuda-12.1")
+
+        with mock.patch.dict(os.environ, {"GPRH_ENVIRONMENT": ""}):
+            info = _device_environment_info("cpu", torch.device("cpu"))
+        self.assertIsNone(info["environment_label"])
 
     def test_device_environment_info_for_cuda_without_cudnn(self) -> None:
-        with mock.patch("torch.backends.cudnn.is_available", return_value=False):
+        with (
+            mock.patch("torch.backends.cudnn.is_available", return_value=False),
+            mock.patch(
+                "torch.cuda.get_device_properties",
+                return_value=_FakeDeviceProperties(),
+            ),
+        ):
             info = _device_environment_info("auto", torch.device("cuda"))
         self.assertEqual(info["device_requested"], "auto")
         self.assertEqual(info["device_resolved"], "cuda")
         self.assertIsNone(info["cudnn_version"])
+        self.assertEqual(info["gpu_name"], "Fake GPU")
+        self.assertEqual(info["gpu_compute_capability"], "8.6")
 
     def test_device_environment_info_for_cuda_with_cudnn(self) -> None:
         with (
             mock.patch("torch.backends.cudnn.is_available", return_value=True),
             mock.patch("torch.backends.cudnn.version", return_value=8900),
+            mock.patch(
+                "torch.cuda.get_device_properties",
+                return_value=_FakeDeviceProperties(),
+            ),
         ):
             info = _device_environment_info("cuda", torch.device("cuda"))
         self.assertEqual(info["cudnn_version"], 8900)
+
+    def test_cuda_driver_api_version_is_formatted_or_none(self) -> None:
+        # ``_cuda_getDriverVersion`` is a private helper that CPU-only
+        # builds do not ship, which is why the reader is best-effort.
+        def patched(value: object) -> mock._patch:
+            return mock.patch.object(
+                torch._C, "_cuda_getDriverVersion", value, create=True
+            )
+
+        with patched(lambda: 12010):
+            self.assertEqual(_cuda_driver_api_version(), "12.1")
+
+        with patched(lambda: 0):
+            self.assertIsNone(_cuda_driver_api_version())
+
+        def raise_runtime_error() -> int:
+            raise RuntimeError("no driver")
+
+        with patched(raise_runtime_error):
+            self.assertIsNone(_cuda_driver_api_version())
+
+        with patched(None):
+            self.assertIsNone(_cuda_driver_api_version())
+
+    def test_nvidia_driver_version_reads_nvidia_smi(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["nvidia-smi"], returncode=0, stdout="535.161.08\n", stderr=""
+        )
+        with mock.patch("subprocess.run", return_value=completed):
+            self.assertEqual(_nvidia_driver_version(), "535.161.08")
+
+    def test_nvidia_driver_version_is_none_without_nvidia_smi(self) -> None:
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertIsNone(_nvidia_driver_version())
+
+        failed = subprocess.CompletedProcess(
+            args=["nvidia-smi"], returncode=9, stdout="", stderr="not found"
+        )
+        with mock.patch("subprocess.run", return_value=failed):
+            self.assertIsNone(_nvidia_driver_version())
 
 
 if __name__ == "__main__":

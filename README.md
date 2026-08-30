@@ -16,6 +16,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
 | Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
 | Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
+| CUDA実行環境（GPU smoke・resnet GPU経路） | 準備済み・**GPU実機未検証** | `Dockerfile.cuda`, `cuda/`, `docs/gpu-verification.md` |
 | 旧ResNet学習・W&B Sweep | experimental（`--allow-legacy`必須） | `main.py`, `sweep_config.yaml` |
 | 旧前処理 | experimental（`--allow-legacy`必須） | `preprocess.py` |
 | GNN | experimental（`--allow-legacy`必須） | `train_gnn.py` |
@@ -52,7 +53,7 @@ Rおよび`sommer`は、この検証済みGBLUP経路では使用しません。
 
 - Python `3.11.x`
 - [uv](https://docs.astral.sh/uv/)（CI検証バージョン: `0.12.3`）
-- CPU実行を標準経路とするPyTorch `2.2.1`
+- CPU実行を標準経路とするPyTorch `2.2.1`（GPU実行は`cuda/`の独立した固定環境を使用、[GPU実行環境](#gpu実行環境)参照）
 
 ```bash
 git clone https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid.git
@@ -186,6 +187,35 @@ legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち
 
 コードの公開は、研究データやログを外部サービスへ送信する許可を意味しません。`online`は利用者自身が明示的に選ぶ操作です。
 
+## GPU実行環境
+
+既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`）はPyTorchをCPU indexへ固定しており、CIとDockerの既定経路はこちらを使います。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定し、CPU側のlockとCI経路には影響させません。
+
+```bash
+# synthetic 3家系でのGPU smoke（GPUが見えない場合はskipではなく失敗する）
+docker compose --profile gpu build gpu-smoke
+docker compose --profile gpu run --rm gpu-smoke
+
+# 実データのResNet（CUDA）
+docker compose --profile gpu run --rm resnet-gpu
+
+# 比較用GBLUP（同一イメージでのCPU実行）
+docker compose --profile gpu run --rm gblup-cuda-env
+```
+
+- `resnet_baseline.py --device cuda`はCUDAが使えない場合に明確に失敗し、CPUへ黙って切り替わりません。実際に使われたdeviceは`metadata.json`の`device_resolved`で確認できます。
+- `metadata.json`にはGPU名、compute capability、CUDA/cuDNN、driver（`nvidia-smi`から取得できた場合）、および`GPRH_ENVIRONMENT`に基づく`environment_label`（どの固定環境で実行したか）を記録します。
+- ホストにはNVIDIA driverとNVIDIA Container Toolkitが必要です。バージョン対応と手順、**未検証事項**は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。
+
+検証の区別:
+
+| 区分 | 状態 |
+|---|---|
+| CPU unit test・synthetic CPU smoke | CIで実行・成功 |
+| CUDA要求時の明確な失敗（GPU不在時） | CPU環境で確認済み |
+| synthetic GPU smoke（`tests/test_gpu_smoke.py`） | **GPU実機未検証**（CPU環境ではskip、CIにGPU runnerなし） |
+| 実データのGPU本実験・精度比較 | **未実施**（Issue #6） |
+
 ## 成果物
 
 GBLUP・ResNetは、実行ごとに再現性の追跡・監査に必要な成果物を`<output-dir>/artifacts/<run_id>/`へ保存します（`gblup_results/artifacts/...`・`resnet_results/artifacts/...`）。ルート直下の共通`artifacts/`は使用せず、`docker-compose.yml`の既存bind mount（`./gblup_results`・`./resnet_results`）だけで書き込み先を確保できます。
@@ -231,7 +261,7 @@ gblup_results/
 
 ## Docker / Docker Compose
 
-`Dockerfile`は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
+`Dockerfile`（CPU既定イメージ）は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。GPU用の`Dockerfile.cuda`は`cuda/`配下の別lockを使う独立したイメージです（[GPU実行環境](#gpu実行環境)）。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
 
 `docker-compose.yml`のサービスは次の3系統に分かれます。
 
@@ -239,9 +269,10 @@ gblup_results/
 |---|---|---|
 | 検証済み（`unit-test`, `cpu-smoke`） | なし | `docker compose up`／`docker compose run <service>`で常に対象 |
 | 実データ（`gblup`, `resnet`） | `real-data` | `--profile real-data`を明示した場合のみ |
+| GPU（`gpu-smoke`, `resnet-gpu`, `gblup-cuda-env`） | `gpu` | `--profile gpu`を明示した場合のみ（CUDAイメージ） |
 | legacy/experimental（`preprocess`, `train`, `train-gpu`, `sweep-init`, `sweep-agent`, `gblup-baseline`, `dev`, `create-weights`, `create-graph-data`, `train-gnn`） | `legacy` | `--profile legacy`を明示した場合のみ |
 
-`docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`legacy`のサービスは、検証済みベースライン経路ではないため既定では起動しません。
+`docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`gpu`・`legacy`のサービスは既定では起動しません。
 
 ### 単体テスト（unit-test）
 
@@ -365,7 +396,9 @@ GitHub Actionsでは、対象コードのformat/lint、単体テストスイー�
 
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
-- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
+- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。
+- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は定義済みですが、GPU実機での動作確認は未実施です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
+- GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
 - CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
