@@ -1,12 +1,13 @@
-import torch
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import KFold, GroupKFold, LeaveOneGroupOut
+import copy
+import gc
+import os
+
 import numpy as np
 import pandas as pd
-import os
-import gc
-import copy
+import torch
+import torch.optim as optim
+from sklearn.model_selection import GroupKFold, KFold, LeaveOneGroupOut
+from torch.utils.data import DataLoader, TensorDataset
 
 import external_logging
 import legacy_guard
@@ -14,7 +15,7 @@ from losses import CorrelationLoss
 from model import GatedGenomicResNet
 
 DESCRIPTION = "legacy ResNet training loop (experimental, not a verified baseline)"
-FAMILY_ID_COLUMN = 'family_id'
+FAMILY_ID_COLUMN = "family_id"
 WANDB_PROJECT = "genomic-resnet-prediction-hy"
 
 config_dict = {
@@ -39,11 +40,13 @@ config_dict = {
     "seed": 42,
 }
 
+
 def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
 
 def compute_fold_pcs(X_train, X_test, var_target=0.90, max_components=200):
     """SNP空間でPCAを学習し、train/testを主成分スコアに射影する。
@@ -58,7 +61,7 @@ def compute_fold_pcs(X_train, X_test, var_target=0.90, max_components=200):
 
     # 経済的SVD: Xtr = U S Vt。Vt.T がSNP空間の主成分ローディング。
     _, S, Vt = np.linalg.svd(Xtr, full_matrices=False)
-    explained = S ** 2
+    explained = S**2
     cum_var = np.cumsum(explained) / np.sum(explained)
     k = min(int(np.searchsorted(cum_var, var_target)) + 1, max_components, Vt.shape[0])
 
@@ -66,6 +69,7 @@ def compute_fold_pcs(X_train, X_test, var_target=0.90, max_components=200):
     train_pc = (Xtr @ V).astype(np.float32)
     test_pc = (Xte @ V).astype(np.float32)
     return train_pc, test_pc
+
 
 def require_family_ids(y_df):
     """family_id列を必須にする。
@@ -92,21 +96,25 @@ def build_cv_splitter(strategy, n_folds):
     else:
         return KFold(n_splits=n_folds, shuffle=True, random_state=42)
 
-def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_label=None):
-    train_x = torch.from_numpy(X_all[train_idx])
-    test_x  = torch.from_numpy(X_all[test_idx])
-    train_y = torch.from_numpy(y_all[train_idx])
-    test_y  = torch.from_numpy(y_all[test_idx])
 
-    if config.get('use_pca', True):
+def run_fold(
+    fold, train_idx, test_idx, X_all, y_all, config, device, family_label=None
+):
+    train_x = torch.from_numpy(X_all[train_idx])
+    test_x = torch.from_numpy(X_all[test_idx])
+    train_y = torch.from_numpy(y_all[train_idx])
+    test_y = torch.from_numpy(y_all[test_idx])
+
+    if config.get("use_pca", True):
         # PCはfold内のtrainのみから学習し、同じ変換をtestへ適用（リーク防止）
         train_pc_np, test_pc_np = compute_fold_pcs(
-            X_all[train_idx], X_all[test_idx],
-            var_target=config.get('pca_var_target', 0.90),
-            max_components=config.get('pca_max_components', 200),
+            X_all[train_idx],
+            X_all[test_idx],
+            var_target=config.get("pca_var_target", 0.90),
+            max_components=config.get("pca_max_components", 200),
         )
         train_pc = torch.from_numpy(train_pc_np)
-        test_pc  = torch.from_numpy(test_pc_np)
+        test_pc = torch.from_numpy(test_pc_np)
     else:
         train_pc = test_pc = None
 
@@ -116,12 +124,12 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
     val_mask = np.zeros(n_total, dtype=bool)
     val_mask[rng.choice(n_total, n_val, replace=False)] = True
 
-    val_x  = train_x[val_mask].to(device)
-    val_y  = train_y[val_mask].to(device)
+    val_x = train_x[val_mask].to(device)
+    val_y = train_y[val_mask].to(device)
     val_pc = train_pc[val_mask].to(device) if train_pc is not None else None
 
-    train_x_fit  = train_x[~val_mask]
-    train_y_fit  = train_y[~val_mask]
+    train_x_fit = train_x[~val_mask]
+    train_y_fit = train_y[~val_mask]
     train_pc_fit = train_pc[~val_mask] if train_pc is not None else None
 
     if train_pc_fit is not None:
@@ -137,23 +145,27 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
         num_blocks=config.num_blocks,
         dropout_rate=config.dropout_rate,
         pc_dim=pc_dim,
-        kernel_size=config.get('kernel_size', 7)
+        kernel_size=config.get("kernel_size", 7),
     ).to(device)
 
-    pretrained_path = config.get('pretrained_path')
+    pretrained_path = config.get("pretrained_path")
     if pretrained_path:
         model.load_pretrained_cnn(pretrained_path)
 
-    optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.l2_reg)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
+    optimizer = optim.AdamW(
+        model.parameters(), lr=config.lr, weight_decay=config.l2_reg
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=config.epochs
+    )
     criterion = CorrelationLoss()
 
-    best_val_corr = -float('inf')
-    best_state    = None
+    best_val_corr = -float("inf")
+    best_state = None
     patience_count = 0
     val_y_np = val_y.cpu().numpy().flatten()
 
-    for epoch in range(config.epochs):
+    for epoch in range(config.epochs):  # noqa: B007 (ループ後の stopped_at で使用)
         model.train()
         for batch in train_loader:
             if train_pc_fit is not None:
@@ -185,26 +197,28 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
 
     model.eval()
     with torch.no_grad():
-        X_test_t  = test_x.to(device)
+        X_test_t = test_x.to(device)
         pc_test_t = test_pc.to(device) if test_pc is not None else None
-        y_pred     = model(X_test_t, pc_test_t).cpu().numpy().flatten()
-        lin_in     = pc_test_t if pc_test_t is not None else X_test_t
+        y_pred = model(X_test_t, pc_test_t).cpu().numpy().flatten()
+        lin_in = pc_test_t if pc_test_t is not None else X_test_t
         y_lin_only = model.linear_path(lin_in).cpu().numpy().flatten()
-        y_true     = test_y.numpy().flatten()
+        y_true = test_y.numpy().flatten()
 
-    h_acc    = np.corrcoef(y_true, y_pred)[0, 1]
-    l_acc    = np.corrcoef(y_true, y_lin_only)[0, 1]
+    h_acc = np.corrcoef(y_true, y_pred)[0, 1]
+    l_acc = np.corrcoef(y_true, y_lin_only)[0, 1]
     gate_val = torch.tanh(model.gate).item()
 
-    label      = family_label if family_label else f"Fold {fold + 1}"
+    label = family_label if family_label else f"Fold {fold + 1}"
     stopped_at = epoch + 1
-    print(f"{label:20s} | Hybrid: {h_acc:.4f} | Linear: {l_acc:.4f} | Gate: {gate_val:.4f} | Stopped: ep{stopped_at}")
+    print(
+        f"{label:20s} | Hybrid: {h_acc:.4f} | Linear: {l_acc:.4f} | Gate: {gate_val:.4f} | Stopped: ep{stopped_at}"
+    )
 
     log_dict = {
         "fold": fold + 1,
         "accuracy/hybrid": h_acc,
         "accuracy/linear": l_acc,
-        "gate_contribution":  gate_val,
+        "gate_contribution": gate_val,
         "stopped_epoch": stopped_at,
     }
     if family_label:
@@ -216,6 +230,7 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
 
     return h_acc, l_acc, log_dict
 
+
 def main(argv=None):
     # legacy許可は外部ロギング許可とは独立。--allow-legacy を付けても
     # W&Bは --wandb-mode で明示しない限り初期化しない。
@@ -225,27 +240,31 @@ def main(argv=None):
     )
     config = logger.run_config(config_dict)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    set_seed(config.get('seed', 42))
+    set_seed(config.get("seed", 42))
 
-    PROCESSED_DATA_PATH = './processed_data_hy/'
+    PROCESSED_DATA_PATH = "./processed_data_hy/"
     print(f"データを読み込み中... (Path: {PROCESSED_DATA_PATH})")
 
-    y_df  = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, 'y_phenotype_hy.csv'), index_col=0)
-    y_all = y_df['Yld (kg/ha)'].values.astype(np.float32).reshape(-1, 1)
-    X_all = np.load(os.path.join(PROCESSED_DATA_PATH, 'X_genotype_int8.npy')).astype(np.float32)
+    y_df = pd.read_csv(
+        os.path.join(PROCESSED_DATA_PATH, "y_phenotype_hy.csv"), index_col=0
+    )
+    y_all = y_df["Yld (kg/ha)"].values.astype(np.float32).reshape(-1, 1)
+    X_all = np.load(os.path.join(PROCESSED_DATA_PATH, "X_genotype_int8.npy")).astype(
+        np.float32
+    )
 
     family_ids = require_family_ids(y_df)
 
     strategy = config.cv_strategy
-    splitter  = build_cv_splitter(strategy, config.folds)
+    splitter = build_cv_splitter(strategy, config.folds)
 
     n_families = len(np.unique(family_ids))
-    pc_mode = "fold内PCA(train限定)" if config.get('use_pca', True) else "生SNP"
+    pc_mode = "fold内PCA(train限定)" if config.get("use_pca", True) else "生SNP"
 
-    print((
+    print(
         f"解析開始 | 個体数: {len(y_all)} | SNP数: {X_all.shape[1]} | "
         f"ファミリー数: {n_families} | CV戦略: {strategy} | 線形パス入力: {pc_mode}"
-    ))
+    )
 
     all_h_acc, all_l_acc = [], []
     split_args = (X_all, y_all, family_ids) if strategy != "random" else (X_all,)
@@ -264,12 +283,23 @@ def main(argv=None):
 
     mean_h = np.mean(all_h_acc)
     mean_l = np.mean(all_l_acc)
-    print("\n" + "="*55)
-    print(f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}")
+    print("\n" + "=" * 55)
+    print(
+        f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}"
+    )
     print(legacy_guard.EXPERIMENTAL_BANNER)
-    print("[EXPERIMENTAL] 上記の指標はfamily内標準化済み表現型に対するものです（kg/haではありません）。")
-    logger.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l, "summary/improvement": mean_h - mean_l})
+    print(
+        "[EXPERIMENTAL] 上記の指標はfamily内標準化済み表現型に対するものです（kg/haではありません）。"
+    )
+    logger.log(
+        {
+            "summary/mean_hybrid": mean_h,
+            "summary/mean_linear": mean_l,
+            "summary/improvement": mean_h - mean_l,
+        }
+    )
     logger.finish()
+
 
 if __name__ == "__main__":
     main()

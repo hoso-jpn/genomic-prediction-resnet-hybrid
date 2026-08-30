@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
-import torch
-from model import GatedGenomicResNet
 import os
+
+import torch
+
+from model import GatedGenomicResNet
+
 
 def create_dummy_weights():
     """
@@ -13,10 +15,10 @@ def create_dummy_weights():
     # モデルを一度初期化して、アーキテクチャを構築
     # パラメータは実際の学習と一致させる必要はない
     dummy_model = GatedGenomicResNet(
-        input_dim=5000,   # 適当な値
-        hidden_dim=128,   # スイープで見つかった最適な値に近いもの
+        input_dim=5000,  # 適当な値
+        hidden_dim=128,  # スイープで見つかった最適な値に近いもの
         num_blocks=3,
-        pc_dim=200
+        pc_dim=200,
     )
 
     # CNN部分のstate_dictのみを抽出
@@ -30,8 +32,9 @@ def create_dummy_weights():
 
     print(f"重みを {save_path} に保存しました。")
     print("保存されたレイヤー:")
-    for key in cnn_weights.keys():
+    for key in cnn_weights:
         print(f"- {key}")
+
 
 if __name__ == "__main__":
     create_dummy_weights()
