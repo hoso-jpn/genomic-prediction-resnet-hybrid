@@ -10,9 +10,10 @@ import gc
 import copy
 
 import external_logging
+import gene_graph
 import legacy_guard
+from losses import CorrelationLoss
 from model import GraphGenomicNet
-from main import CorrelationLoss
 
 DESCRIPTION = "legacy GNN training loop (experimental, not a verified baseline)"
 WANDB_PROJECT = "genomic-gnn-prediction"
@@ -33,23 +34,15 @@ def load_data():
     family_ids = y_df['family_id'].values
     snp_map_df = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, 'snp_to_gene_map.csv'))
     adj_df = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, 'gene_adj.csv'))
-    edge_index = torch.tensor(adj_df.values, dtype=torch.long).t().contiguous()
-    # 無向グラフとして扱うため逆方向エッジを追加 (GCNConvは対称グラフを前提とする)
-    edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
     snp_to_gene_map = torch.tensor(snp_map_df['gene_id'].values, dtype=torch.long)
 
-    # 遺伝子数はマッピングとグラフから導出し、両者の整合性を検証する
-    num_genes = int(snp_to_gene_map.max().item()) + 1
-    max_edge_node = int(edge_index.max().item())
-    if max_edge_node >= num_genes:
-        raise ValueError(
-            f"gene_adj のノードID({max_edge_node}) が遺伝子数({num_genes})を超えています。"
-            " snp_to_gene_map と gene_adj の整合性を確認してください。"
-        )
-    if snp_to_gene_map.numel() != X_all.shape[1]:
-        raise ValueError(
-            f"snp_to_gene_map の長さ({snp_to_gene_map.numel()}) が SNP数({X_all.shape[1]})と一致しません。"
-        )
+    # 遺伝子数はマッピングから導出し、エッジ側をその範囲で検証する。
+    # gene_adj.csv は重複のない双方向エッジ列（各方向1本）であることが契約で、
+    # 読み込み後に逆方向を再連結しない（gene_graph.load_edge_index を参照）。
+    num_genes = gene_graph.validate_snp_to_gene_map(
+        snp_to_gene_map, snp_count=X_all.shape[1]
+    )
+    edge_index = gene_graph.load_edge_index(adj_df, num_genes)
     return X_all, y_all, family_ids, snp_to_gene_map, edge_index, num_genes
 
 # --- 訓練ループ ---
