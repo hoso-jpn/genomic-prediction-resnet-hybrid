@@ -52,6 +52,17 @@ services:
 
   # ---------------------------------------------------------------------
   # legacy / experimental経路（検証済みベースラインではない。既定では起動しない）
+  #
+  # preprocess.py / main.py / train_gnn.py は --allow-legacy が無い限り
+  # 起動時に終了する。以下のサービス定義には意図的に --allow-legacy を
+  # 含めていないため、--profile legacy を指定しただけではこの確認を
+  # 迂回できない。legacyを実行する場合は、コマンドを明示的に上書きする:
+  #
+  #   docker compose --profile legacy run --rm train \
+  #     python3 main.py --allow-legacy
+  #
+  # legacy許可とW&B送信許可は別。W&Bへ記録する場合は
+  # --wandb-mode offline / online も明示的に追加する（既定は無効）。
   # ---------------------------------------------------------------------
 
   # 生データ → processed_data_hy/ に変換

@@ -1,11 +1,34 @@
 # W&B Sweep 設定 — GatedGenomicResNet ハイパーパラメータ探索
 #
+# 【experimental】このスイープは legacy の main.py を対象にしています。
+# 検証済みベースラインは gblup_baseline.py / resnet_baseline.py であり、
+# ここでの探索結果を検証済み性能として扱わないでください。
+#
+# 重要:
+#   - main.py は --allow-legacy が無い限り起動時に終了します。この設定は
+#     意図的に --allow-legacy を含めていません。スイープを実行するには、
+#     legacy利用を承知したうえで下の command ブロックを自分で追加してください
+#     （sweep起動やComposeのprofile指定だけでこの確認を迂回させないため）:
+#
+#       command:
+#         - ${env}
+#         - ${interpreter}
+#         - ${program}
+#         - --allow-legacy
+#         - ${args}
+#
+#   - main.py の外部ロギングは既定で無効です。sweepにはW&Bへの記録が必要な
+#     ため、上の command に --wandb-mode online（またはoffline）も追加します。
+#     legacy許可とW&B送信許可は別々の明示的な選択です。
+#
 # 使い方:
 #   1. スイープを登録:  wandb sweep sweep_config.yaml
 #   2. エージェント起動: wandb agent <SWEEP_ID>  (--count 30 で最大30試行)
 #   3. 複数GPUで並列実行: 複数ターミナルで同じコマンドを実行するだけでOK
 #
 # 最適化対象: LOFO全フォールド平均 Pearson r (summary/mean_hybrid)
+# 注意: outer LOFOの集計値を探索目標にしているため、探索後の最高値は
+#       独立した汎化性能ではありません（選択バイアスを含みます）。
 
 program: main.py
 project: genomic-resnet-prediction-hy
