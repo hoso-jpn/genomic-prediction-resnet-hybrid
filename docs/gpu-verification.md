@@ -35,12 +35,65 @@ CI（GitHub Actions）にGPU runnerはありません。CIの成功はCPU経路�
 | GPU上で稼働中のプロセス | `llama-server`（6,412 MiB を使用中） |
 | Docker | 29.7.2（`nvidia` runtime登録済み、default runtimeは`runc`） |
 | NVIDIA Container Toolkit | 1.20.0-1 |
-| ルートFSの空き容量 | **230 MiB**（`/dev/nvme0n1p2`、183 GiB中） |
 | ホストのPython / uv | Python 3.12.3 / uv 未導入 |
+
+### ディスクの実測と内訳（2026-08-31、読み取りのみ）
+
+| マウント | デバイス | 容量 | 使用 | 空き | 使用率 |
+|---|---|---:|---:|---:|---:|
+| `/` | `/dev/nvme0n1p2` (ext4) | 183 GiB | 173 GiB | **238 MiB** | **100%** |
+| `/home` | `/dev/nvme0n1p3` (ext4) | 3.5 TiB | 880 GiB | 2.4 TiB | 27% |
+| `/data` | `/dev/nvme1n1p1` (ext4) | 3.6 TiB | 115 GiB | 3.3 TiB | 4% |
+
+inodeは`/`で12%使用（枯渇していません）。
+
+**Dockerの保存先は1か所ではありません。**
+
+| 項目 | 実測値 | 置き場所 |
+|---|---|---|
+| `Docker Root Dir` | `/data/docker` | `/data`（空き3.3 TiB） |
+| Storage Driver | `overlayfs`（`driver-type: io.containerd.snapshotter.v1`） | — |
+| containerdの起動引数 | `/usr/bin/containerd`（`--root`指定なし） | 既定の`/var/lib/containerd`＝**`/`（満杯のFS）** |
+| `/etc/containerd/config.toml` | 存在するが`root` / `state`の指定行なし | 既定値が有効 |
+| `dockerd`の起動引数 | `-H fd:// --containerd=/run/containerd/containerd.sock` | 外部containerdを使用 |
+
+`docker system df`（論理サイズ。containerd image store使用時も同じ値を返します）:
+
+| 種別 | 総数 | 使用中 | サイズ | 解放可能（docker表示） |
+|---|---:|---:|---:|---:|
+| Images | 30 | 16 | 115.5 GB | 21.5 GB |
+| Containers | 23 | 0 | 1.65 GB | 1.65 GB |
+| Local Volumes | 3 | 3 | 1.121 GB | 0 B |
+| Build Cache | 34 | 0 | 35.01 GB | 215.3 MB |
+
+大きいイメージ上位: `vllm/vllm-openai:latest` 29.9 GB、`vllm-gemma4-base:2026-06-29` 29.9 GB、`vllm/vllm-openai:qwen38-x86_64-cu130` 23 GB、`local/flash-next:pilot-v1-*` 15.9 GB、`nvidia/cuda:12.8.1-devel-ubuntu24.04` 14.6 GB。
+
+**`/`の内訳（一般ユーザー権限で読める範囲）**: `/usr` 22 GiB、`/var` 5.0 GiB（うち`/var/log` 1.2 GiB、`journald` 1,021 MiB）、`/tmp` 2.3 GiB（内訳: `/tmp/issue30_hc_benchmark` 2.3 GiB、所有者は作業ユーザー、更新 2026-08-24）、`/opt` 679 MiB、`/boot` 391 MiB。読める範囲の合計は約46 GiBで、**使用中173 GiBとの差およそ127 GiBは、権限がなく`du`で読めないディレクトリにあります**（`/var/lib/containerd`は`root:root` 0700、`/var/lib/docker`は0710）。
+
+**推定（未確定）**: Dockerは containerd snapshotter を使用しており、イメージ層は`Docker Root Dir`ではなく**containerdのroot（既定の`/var/lib/containerd`＝`/`）**に置かれます。読めない約127 GiBは、`docker system df`が示すイメージ115.5 GBとおおむね整合します。**これは権限の制約による推定であり、確定していません。** 確定させるには、ホスト側で次を実行してください（読み取りのみ）。
+
+```bash
+sudo du -sh /var/lib/containerd /var/lib/docker /data/docker
+sudo du -xh --max-depth=1 /var/lib | sort -h | tail
+```
+
+### 削除・移動の候補（**本Issueでは実行していません**）
+
+| 対象 | 容量 | 用途 | 使用中か | 再生成 | 影響 | 回復できる容量 |
+|---|---:|---|---|---|---|---:|
+| 停止済みコンテナ 23個 | 1.65 GB | 過去の実行 | 全て停止中 | 不可（ログ・状態） | コンテナログ・停止済み状態が消える | 1.65 GB |
+| Build Cache 34件 | 35.01 GB | ビルド高速化 | 使用中0 | 再ビルドで再生成 | 次回buildが遅くなる | docker表示の解放可能は215.3 MB。`docker builder prune -a`なら最大35 GB |
+| 未使用イメージ（30個中14個が未使用） | 21.5 GB | 過去のイメージ | 未使用 | pull/build で再取得可（大きいものは時間がかかる） | 参照していたtagが消える。vllm等の大型イメージを消すと再取得コスト大 | 21.5 GB |
+| `/tmp/issue30_hc_benchmark` | 2.3 GB | 過去のベンチマーク成果物（作業ユーザー所有、2026-08-24） | 不明（要確認） | 再実行で再生成 | 保存目的なら退避が必要 | 2.3 GB |
+| journald のログ | 1,021 MiB | システムログ | 使用中 | 不可 | 過去ログの参照範囲が縮む | `--vacuum-size=200M`で約800 MiB |
+
+単純合計で最大 約61 GB。実際の解放量は共有層の有無で変わります。
+
+**構成変更の選択肢（要承認・本Issueの範囲外）**: containerdのroot（またはDockerのimage store）を空きのある`/data`・`/home`へ移す方法もあります。設定変更とデーモン再起動が必要で、稼働中のコンテナ・サービスへ影響するため、本対応では提案までとします。
 
 ### 実機実行の前に解決が必要な点
 
-- **ディスク空き容量が230 MiBしかありません。** CUDAイメージのbuild（PyTorch + CUDA runtime wheelで数GB規模）はこの空き容量では完了しません。実機でのbuild・実行の前に、空き容量の確保が必要です。
+- **`/`が100%使用（空き238 MiB）です。** CUDAイメージのbuildはcontainerdのstore（推定`/var/lib/containerd`＝`/`）へ数GBを書き込むため、この状態では完了しません。上表のいずれかで空き容量を確保するのが前提です。
 - GPUは共有中です（`llama-server`が6.4 GiBを使用）。本Issueの範囲では既存サービスを停止しません。GPU smokeの所要VRAMは小規模（synthetic 3家系・1 epoch）ですが、本実験（#6）を行う場合は、空きVRAMと既存サービスへの影響を事前に確認してください。
 - ホストにuvが無いため、非Docker経路を使う場合は導入が必要です（Docker経路であれば不要）。
 
@@ -134,7 +187,7 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 
 | 項目 | 状態 |
 |---|---|
-| `docker compose --profile gpu build gpu-smoke` | 未実施（実機のディスク空き容量が230 MiB。§2） |
+| `docker compose --profile gpu build gpu-smoke` | 未実施（`/`が100%使用・空き238 MiB。§2のディスク内訳と候補を参照） |
 | `docker compose --profile gpu run --rm gpu-smoke` | 未実施 |
 | CUDA上でのforward/backward・LOFO完走・run artifacts保存 | 未実施 |
 | GPU要求時の不在・不一致の挙動（実機） | 未実施（GPUの無い環境での失敗のみ確認済み） |
@@ -148,7 +201,7 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 
 ## 6. 既知の未解決事項
 
-- 実機でのGPU実行は未実施です。§2のディスク空き容量を確保したうえで、まずGPU smoke（synthetic・小規模）から実施してください。
+- 実機でのGPU実行は未実施です。§2のディスク空き容量を確保したうえで、まずGPU smoke（synthetic・小規模）から実施してください。ディスクの内訳のうち約127 GiBは権限の都合で未確定です（§2の確認コマンドを参照）。
 - `nvidia-smi`が表示するCUDA版（実機では13.2）は、driverが対応する最大のCUDA版です。コンテナ／venv内で実際に使われるCUDA runtimeの版（`torch.version.cuda` = 13.0）とは別物であり、両者を同一視しないでください。
 - **ベースイメージの変更はホスト側の制約を解消しません。** `Dockerfile.cuda`が`python:3.11-slim`を使うのは、CPUイメージと基盤を揃えて依存差を減らすためです。CUDA runtime / cuDNNは`cuda/uv.lock`が固定するwheelが提供します。ホストのdriverが要件（cu130なら`>= 580.65.06`）未満の場合や、GPUのarchitectureが採用したPyTorchビルドの対象外（例: sm_120非対応のビルド）である場合は、`nvidia/cuda`系のベースイメージへ変更しても解決しません。必要なのはdriverの更新、またはGPUに対応したPyTorch/CUDAの組合せへの変更です。
 - GPU実行時の数値はCPU実行と完全一致しません（cuDNNのアルゴリズム選択・非決定的なreduction）。#6の比較では、同一splitと同一の評価尺度を使ったうえで、この差を制約として明記してください。
