@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import run_manifest
 from soynam_data import GENOTYPE_SUFFIX, PHENOTYPE_SUFFIX
 
 REQUIRED_ARTIFACT_FILES = (
@@ -334,12 +335,27 @@ def test_gblup_cli_cpu_smoke(tmp_path: Path) -> None:
         "--expected-families",
         "3",
     ]
+    # The #9 provenance contract must survive the new CLI: input files are
+    # recorded by name and checksum (never by path), and the running code
+    # is checksummed too.
     assert len(metadata["input_files"]) == 3
+    for entry in metadata["input_files"]:
+        assert entry["phenotype_file"].endswith(PHENOTYPE_SUFFIX)
+        assert len(entry["phenotype_sha256"]) == 64
+        assert len(entry["genotype_sha256"]) == 64
+        assert "/" not in entry["phenotype_file"]
+    assert metadata["source_file_checksums"]
+    assert all(len(value) == 64 for value in metadata["source_file_checksums"].values())
 
     split = json.loads((run_dir / "split.json").read_text())
     assert split["outer"]["strategy"] == "leave_one_family_out"
     assert len(split["outer"]["folds"]) == 3
     assert split["inner"] is None
+    # outer_split_hash still describes exactly this split: recomputing it
+    # from the recorded ordered_samples/folds must reproduce the value.
+    outer = dict(split["outer"])
+    recorded_hash = outer.pop("outer_split_hash")
+    assert recorded_hash == run_manifest.canonical_json_hash(outer)
 
     preprocessing = json.loads((run_dir / "preprocessing.json").read_text())
     assert len(preprocessing["folds"]) == 3
