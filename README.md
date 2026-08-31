@@ -16,8 +16,9 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
 | Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
 | Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
-| 旧ResNet学習・W&B Sweep | experimental | `main.py`, `sweep_config.yaml` |
-| GNN | experimental | `train_gnn.py` |
+| 旧ResNet学習・W&B Sweep | experimental（`--allow-legacy`必須） | `main.py`, `sweep_config.yaml` |
+| 旧前処理 | experimental（`--allow-legacy`必須） | `preprocess.py` |
+| GNN | experimental（`--allow-legacy`必須） | `train_gnn.py` |
 
 「検証済み」は、入力整合性・split・前処理・出力契約とCPU上の実行経路を自動テストまたはスモークテストで確認したことを意味します。予測精度の優位性や大規模GPU実験の再現を保証するものではありません。
 
@@ -181,6 +182,8 @@ GBLUPの外部ロギングは`--wandb-mode`だけで決まります。
 
 ResNet（`resnet_baseline.py`）はW&Bを使用しません。実行の記録は両ベースラインとも[成果物](#成果物)節のrun artifactsが担います。
 
+legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち、既定は`disabled`です。`--allow-legacy`（[legacy / experimental経路](#legacy--experimental経路)）は旧経路の実行許可であり、外部送信の許可ではありません。両者は別々に明示する必要があります。
+
 コードの公開は、研究データやログを外部サービスへ送信する許可を意味しません。`online`は利用者自身が明示的に選ぶ操作です。
 
 ## 成果物
@@ -287,7 +290,45 @@ docker compose --profile real-data run --rm gblup \
 
 `preprocess`・`train`・`train-gpu`・`sweep-init`・`sweep-agent`・`gblup-baseline`・`dev`・`create-weights`・`create-graph-data`・`train-gnn`は`profiles: ["legacy"]`で分離されています。これらは検証済みベースライン経路ではなく、`--profile legacy`を明示しない限り起動しません。
 
+さらに、`preprocess.py`・`main.py`・`train_gnn.py`を起動するサービスは、サービス定義に`--allow-legacy`を含めていないため、profileを指定して起動しても終了コード2で停止します（[legacy / experimental経路](#legacy--experimental経路)）。意図的に実行する場合はコマンドを上書きします。
+
+```bash
+docker compose --profile legacy run --rm train \
+  python3 main.py --allow-legacy
+```
+
 実データはリポジトリにもDockerビルドコンテキストにも含めません（`.gitignore`・`.dockerignore`でそれぞれ除外済み）。`data/`はbind mountでのみコンテナへ渡します。
+
+## legacy / experimental経路
+
+`preprocess.py`・`main.py`・`train_gnn.py`は検証済みベースラインではありません。誤って本実験や精度比較に使わないよう、これらは`--allow-legacy`が無い限り、**入力の読み込み・ファイル生成・W&Bの初期化より前に**終了コード2で停止し、代替コマンドと既知の問題を表示します。
+
+```bash
+# 既定（何もせず終了し、検証済みコマンドと既知の問題を表示）
+uv run --frozen --extra gblup python main.py
+
+# legacy利用を承知したうえで実行する場合
+uv run --frozen --extra gblup python main.py --allow-legacy
+```
+
+- `--allow-legacy`はコマンドライン引数です。Docker Composeの`--profile legacy`指定や、W&B sweep agentの起動だけではこの確認を満たしません。Composeでlegacyを実行する場合は`docker compose --profile legacy run --rm train python3 main.py --allow-legacy`のようにコマンドを明示的に上書きし、sweepの場合は`sweep_config.yaml`の`command`へ自分で追記します。
+- legacy許可と外部ロギング許可は分離しています。`--allow-legacy`を付けてもW&Bは初期化されず、`--wandb-mode offline` / `online`を別途明示した場合だけ有効になります。
+- `main.py`は`family_id`列を必須にします。欠落時にrandom CVへ暗黙に切り替えることはせず、明確に失敗します。
+- 実行ログの冒頭・末尾と、`preprocess.py`が生成する`processed_data_hy/EXPERIMENTAL.txt`にexperimentalである旨を出力します。
+- legacyの出力は家系内で標準化した表現型に対する指標であり、検証済み経路のraw kg/haのOOF性能とは比較できません。W&B Sweepの探索目標はouter LOFOの集計値であるため、探索後の最高値も独立した汎化性能の証跡にはなりません。これらを検証済み性能として引用しないでください。
+
+### legacyを検証済み扱いへ移行するための条件
+
+継続利用する場合、次をすべて満たすまではexperimentalのままとします。
+
+1. 入力は共通ローダー（`soynam_data.py`）を経由し、family ID照合・founder除外・marker ID検証・未知記号の拒否を通ること。
+2. sample IDとmarker IDを処理の全段階で保持し、位置インデックスだけに依存しないこと。
+3. 欠損補完・分散/MAFフィルター・標準化・PCAをfold内のtrain partitionだけでfitすること。
+4. inner selection（epoch・ハイパーパラメータ選択）とouter testを分離し、選択後の最高値をouter性能として報告しないこと。
+5. 検証済み経路と同一のsplit（`outer_split_hash`が一致）と同一の尺度（raw kg/ha）で評価すること。
+6. `run_manifest.py`の既存manifest契約（metadata/split/preprocessing/metrics/predictions、`schema_version`、原子的な確定）に沿った成果物を出力すること。
+
+GNNについては、SNP→gene対応をfoldのmarker maskへIDベースで反映する必要があり、ローダーの差し替えだけでは条件を満たしません。
 
 ## OOF出力契約
 
@@ -307,23 +348,25 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 ```bash
 uv run --frozen --extra gblup \
   ruff format --check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
+  external_logging.py legacy_guard.py tests
 
 uv run --frozen --extra gblup \
   ruff check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
+  external_logging.py legacy_guard.py tests
 
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
+GitHub Actionsでは、対象コードのformat/lint、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
-- `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。
+- `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
 - CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
 ## データ引用

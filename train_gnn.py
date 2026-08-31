@@ -2,15 +2,20 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import wandb
 from sklearn.model_selection import LeaveOneGroupOut
 import numpy as np
 import pandas as pd
 import os
 import gc
 import copy
+
+import external_logging
+import legacy_guard
 from model import GraphGenomicNet
 from main import CorrelationLoss
+
+DESCRIPTION = "legacy GNN training loop (experimental, not a verified baseline)"
+WANDB_PROJECT = "genomic-gnn-prediction"
 
 # --- Config ---
 # num_genes はデータ(snp_to_gene_map / gene_adj)から導出するため config には持たない。
@@ -48,9 +53,14 @@ def load_data():
     return X_all, y_all, family_ids, snp_to_gene_map, edge_index, num_genes
 
 # --- 訓練ループ ---
-def run_gnn_training():
-    wandb.init(project="genomic-gnn-prediction", config=config_dict)
-    config = wandb.config
+def run_gnn_training(argv=None):
+    # legacy許可は外部ロギング許可とは独立。--allow-legacy を付けても
+    # W&Bは --wandb-mode で明示しない限り初期化しない。
+    args = legacy_guard.require_opt_in("train_gnn.py", DESCRIPTION, argv)
+    logger = external_logging.create_run_logger(
+        args.wandb_mode, project=WANDB_PROJECT, config=config_dict
+    )
+    config = logger.run_config(config_dict)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     torch.manual_seed(config.get('seed', 42))
@@ -110,7 +120,7 @@ def run_gnn_training():
         else:
             print(f"Fold {fold + 1:2d} | Test correlation: {test_corr:.4f}")
         all_test_corrs.append(test_corr)
-        wandb.log({"fold": fold + 1, "gnn/test_correlation": test_corr})
+        logger.log({"fold": fold + 1, "gnn/test_correlation": test_corr})
         del model, optimizer
         gc.collect()
 
@@ -118,8 +128,10 @@ def run_gnn_training():
     mean_corr = np.nanmean(all_test_corrs)
     print(f"GNN Mean LOFO Correlation: {mean_corr:.4f}")
     print("=" * 45)
-    wandb.log({"summary/mean_correlation": mean_corr})
-    wandb.finish()
+    print(legacy_guard.EXPERIMENTAL_BANNER)
+    print("[EXPERIMENTAL] 上記の指標はfamily内標準化済み表現型に対するものです（kg/haではありません）。")
+    logger.log({"summary/mean_correlation": mean_corr})
+    logger.finish()
 
 if __name__ == "__main__":
     run_gnn_training()

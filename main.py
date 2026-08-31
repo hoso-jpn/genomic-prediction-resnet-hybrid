@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-import wandb
 from sklearn.model_selection import KFold, GroupKFold, LeaveOneGroupOut
 import numpy as np
 import pandas as pd
@@ -10,7 +9,13 @@ import os
 import gc
 import copy
 
+import external_logging
+import legacy_guard
 from model import GatedGenomicResNet
+
+DESCRIPTION = "legacy ResNet training loop (experimental, not a verified baseline)"
+FAMILY_ID_COLUMN = 'family_id'
+WANDB_PROJECT = "genomic-resnet-prediction-hy"
 
 class CorrelationLoss(nn.Module):
     """損失としてピアソン相関係数の負の値を計算する"""
@@ -75,6 +80,23 @@ def compute_fold_pcs(X_train, X_test, var_target=0.90, max_components=200):
     train_pc = (Xtr @ V).astype(np.float32)
     test_pc = (Xte @ V).astype(np.float32)
     return train_pc, test_pc
+
+def require_family_ids(y_df):
+    """family_id列を必須にする。
+
+    family_idが無い入力でrandom CVへ自動的に切り替えると、family単位の
+    汎化性能を求めた実行が、黙って個体ランダム分割の数値を返してしまう。
+    暗黙のフォールバックは行わず、ここで明確に失敗させる。
+    """
+    if FAMILY_ID_COLUMN not in y_df.columns:
+        raise RuntimeError(
+            f"{FAMILY_ID_COLUMN}列が見つかりません。family単位のgroup-aware評価には"
+            f"{FAMILY_ID_COLUMN}が必須です。random CVへ自動的に切り替えることはしません。"
+            " family_id付きで processed_data_hy/y_phenotype_hy.csv を再生成するか、"
+            "検証済み経路（gblup_baseline.py / resnet_baseline.py）を使用してください。"
+        )
+    return y_df[FAMILY_ID_COLUMN].values
+
 
 def build_cv_splitter(strategy, n_folds):
     if strategy == "lofo":
@@ -208,9 +230,14 @@ def run_fold(fold, train_idx, test_idx, X_all, y_all, config, device, family_lab
 
     return h_acc, l_acc, log_dict
 
-def main():
-    wandb.init(project="genomic-resnet-prediction-hy", config=config_dict)
-    config = wandb.config
+def main(argv=None):
+    # legacy許可は外部ロギング許可とは独立。--allow-legacy を付けても
+    # W&Bは --wandb-mode で明示しない限り初期化しない。
+    args = legacy_guard.require_opt_in("main.py", DESCRIPTION, argv)
+    logger = external_logging.create_run_logger(
+        args.wandb_mode, project=WANDB_PROJECT, config=config_dict
+    )
+    config = logger.run_config(config_dict)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seed(config.get('seed', 42))
 
@@ -221,18 +248,12 @@ def main():
     y_all = y_df['Yld (kg/ha)'].values.astype(np.float32).reshape(-1, 1)
     X_all = np.load(os.path.join(PROCESSED_DATA_PATH, 'X_genotype_int8.npy')).astype(np.float32)
 
-    if 'family_id' in y_df.columns:
-        family_ids = y_df['family_id'].values
-    else:
-        print("警告: family_id列が見つかりません。cv_strategy を 'random' に変更します。")
-        family_ids = None
-        if config.cv_strategy != "random":
-            wandb.config.update({"cv_strategy": "random"}, allow_val_change=True)
+    family_ids = require_family_ids(y_df)
 
-    strategy = config.cv_strategy if family_ids is not None else "random"
+    strategy = config.cv_strategy
     splitter  = build_cv_splitter(strategy, config.folds)
 
-    n_families = len(np.unique(family_ids)) if family_ids is not None else "N/A"
+    n_families = len(np.unique(family_ids))
     pc_mode = "fold内PCA(train限定)" if config.get('use_pca', True) else "生SNP"
 
     print((
@@ -245,13 +266,13 @@ def main():
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(*split_args)):
         family_label = None
-        if strategy == "lofo" and family_ids is not None:
+        if strategy == "lofo":
             family_label = str(np.unique(family_ids[test_idx])[0])
 
         h_acc, l_acc, log_dict = run_fold(
             fold, train_idx, test_idx, X_all, y_all, config, device, family_label
         )
-        wandb.log(log_dict)
+        logger.log(log_dict)
         all_h_acc.append(h_acc)
         all_l_acc.append(l_acc)
 
@@ -259,7 +280,10 @@ def main():
     mean_l = np.mean(all_l_acc)
     print("\n" + "="*55)
     print(f"平均 Hybrid: {mean_h:.4f} | 平均 Linear: {mean_l:.4f} | 改善: {mean_h - mean_l:+.4f}")
-    wandb.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l, "summary/improvement": mean_h - mean_l})
+    print(legacy_guard.EXPERIMENTAL_BANNER)
+    print("[EXPERIMENTAL] 上記の指標はfamily内標準化済み表現型に対するものです（kg/haではありません）。")
+    logger.log({"summary/mean_hybrid": mean_h, "summary/mean_linear": mean_l, "summary/improvement": mean_h - mean_l})
+    logger.finish()
 
 if __name__ == "__main__":
     main()

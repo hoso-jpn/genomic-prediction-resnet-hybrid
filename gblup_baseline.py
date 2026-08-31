@@ -9,7 +9,6 @@ computed from the training families independently in every LOFO fold.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -22,8 +21,10 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
+import external_logging
 import run_manifest
 import soynam_data
+from external_logging import DEFAULT_WANDB_MODE, NullRunLogger, WandbRunLogger
 from soynam_data import list_family_files, load_soynam_dataset
 
 FloatArray = NDArray[np.float64]
@@ -41,8 +42,6 @@ EXPECTED_FAMILY_COUNT = 16
 MIN_EXPECTED_FAMILY_COUNT = 2
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_OUTPUT_DIR = Path("gblup_results")
-WANDB_MODES = ("disabled", "offline", "online")
-DEFAULT_WANDB_MODE = "disabled"
 WANDB_PROJECT = "genomic-resnet-prediction-hy"
 WANDB_JOB_TYPE = "gblup_baseline"
 WANDB_RUN_NAME = "gblup-lofo-leakage-safe"
@@ -476,65 +475,22 @@ def save_run_artifacts(
     )
 
 
-class NullRunLogger:
-    """Logger used when external experiment logging is disabled.
-
-    Instantiating this never imports or initializes W&B, so a disabled run
-    performs no external logging setup at all rather than initializing a
-    client and then suppressing its output.
-    """
-
-    mode = "disabled"
-
-    def log(self, payload: dict[str, Any]) -> None:
-        return None
-
-    def finish(self) -> None:
-        return None
-
-
-class WandbRunLogger:
-    """Logger backed by an already-initialized W&B run."""
-
-    def __init__(self, module: Any, mode: str) -> None:
-        self._module = module
-        self.mode = mode
-
-    def log(self, payload: dict[str, Any]) -> None:
-        self._module.log(payload)
-
-    def finish(self) -> None:
-        self._module.finish()
-
-
 def create_run_logger(
     mode: str, *, config: dict[str, Any]
 ) -> NullRunLogger | WandbRunLogger:
-    """Create the run logger for ``mode``, importing W&B only when used.
+    """Create this run's logger through the shared external-logging rules.
 
-    The CLI selection is authoritative: ``WANDB_MODE`` is overwritten with
-    the resolved mode before ``wandb.init``, and the same value is passed
-    to ``wandb.init`` explicitly, so an ambient environment variable can
-    neither escalate ``offline`` to ``online`` nor re-enable a run the
-    caller asked to disable. ``offline`` keeps W&B's local run directory
-    but sends nothing to the service.
+    ``external_logging`` owns the mode semantics (CLI-authoritative,
+    disabled by default, no import of W&B unless it is actually used); this
+    wrapper only supplies the GBLUP run's project, job type, and name.
     """
-    if mode not in WANDB_MODES:
-        raise ValueError(f"unknown W&B mode: {mode!r}")
-    if mode == "disabled":
-        return NullRunLogger()
-
-    import wandb
-
-    os.environ["WANDB_MODE"] = mode
-    wandb.init(
+    return external_logging.create_run_logger(
+        mode,
         project=WANDB_PROJECT,
         job_type=WANDB_JOB_TYPE,
         name=WANDB_RUN_NAME,
-        mode=mode,
         config=config,
     )
-    return WandbRunLogger(wandb, mode)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -558,16 +514,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             f"{EXPECTED_FAMILY_COUNT})"
         ),
     )
-    parser.add_argument(
-        "--wandb-mode",
-        choices=WANDB_MODES,
-        default=DEFAULT_WANDB_MODE,
-        help=(
-            "Weights & Biases mode. 'disabled' (default) never initializes "
-            "W&B, 'offline' writes local W&B files only, and 'online' is the "
-            "only setting that sends data to the service"
-        ),
-    )
+    external_logging.add_wandb_mode_argument(parser)
     args = parser.parse_args(argv)
     if args.expected_families < MIN_EXPECTED_FAMILY_COUNT:
         parser.error(
@@ -590,7 +537,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     family_files = list_family_files(data_dir)
     input_files = run_manifest.describe_input_files(family_files)
     source_checksums = run_manifest.source_file_checksums(
-        [Path(__file__), Path(soynam_data.__file__), Path(run_manifest.__file__)]
+        [
+            Path(__file__),
+            Path(external_logging.__file__),
+            Path(soynam_data.__file__),
+            Path(run_manifest.__file__),
+        ]
     )
 
     dataset = load_soynam_dataset(data_dir, family_files=family_files)
