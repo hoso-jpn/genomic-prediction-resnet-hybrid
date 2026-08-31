@@ -51,6 +51,95 @@ services:
       --device cpu
 
   # ---------------------------------------------------------------------
+  # GPU経路（CUDAイメージ。profile "gpu" を明示した場合のみ起動する）
+  #
+  # Dockerfile.cuda / cuda/uv.lock で固定した独立環境（torch 2.12.1+cu130）を
+  # 使う。対象GPUは compute capability 12.0（RTX 5090 等）で、ホストには
+  # NVIDIA driver >= 580.65.06 と NVIDIA Container Toolkit が必要。
+  # CIでは実行しない（GPU runnerが無いため）。実機での確認状況は
+  # docs/gpu-verification.md。
+  # ---------------------------------------------------------------------
+
+  # syntheticな3家系でCUDA上のforward/backwardとLOFOを確認するsmoke test
+  # GPRH_REQUIRE_CUDA=1 により、GPUが見えない場合はskipではなく失敗する。
+  gpu-smoke:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu"]
+    environment:
+      GPRH_REQUIRE_CUDA: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: pytest -q tests/test_gpu_smoke.py
+
+  # 検証済みResNetをCUDAで実行する経路（実データ、手動実行）
+  # --device cuda はCUDA不在時に明確に失敗し、CPUへ黙って切り替わらない。
+  resnet-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu"]
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./resnet_results:/workspace/resnet_results
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      python resnet_baseline.py
+      --data-dir data
+      --output-dir resnet_results
+      --device cuda
+
+  # ResNet（CPU実行）を同一のCUDAイメージで実行する経路
+  # CPU実行とGPU実行の比較でtorchのバージョンまで揃えるための経路。
+  # 既定のCPUイメージ（torch 2.2.1）とはtorchが異なるため、CPU/GPUを
+  # 直接比較する場合はこちらを使う。GPUの割当は不要。
+  resnet-cpu-cuda-env:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu"]
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./resnet_results:/workspace/resnet_results
+    environment:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    command: >
+      python resnet_baseline.py
+      --data-dir data
+      --output-dir resnet_results
+      --device cpu
+
+  # GBLUP（CPU実行）を同一のCUDAイメージで実行する経路
+  # GPU比較でGBLUP側の数値計算依存が変わらないようにするため、同じ
+  # イメージ・同じlockでCPU実行する。GPUの割当は不要。
+  gblup-cuda-env:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu"]
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./gblup_results:/workspace/gblup_results
+    command: >
+      python gblup_baseline.py
+      --data-dir data
+      --output-dir gblup_results
+      --expected-families 16
+
+  # ---------------------------------------------------------------------
   # legacy / experimental経路（検証済みベースラインではない。既定では起動しない）
   #
   # preprocess.py / main.py / train_gnn.py は --allow-legacy が無い限り

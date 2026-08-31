@@ -1,0 +1,85 @@
+# CUDA実行環境の依存関係（CPU既定環境とは独立して固定する）
+#
+# ルートの pyproject.toml / uv.lock は PyTorch を CPU index へ固定しており、
+# CIとDockerの既定経路はそちらを使う。GPU比較実験用の環境をそこへ混ぜると
+# 既定のCPU経路の再現性が変わるため、CUDA版は本ディレクトリの
+# pyproject.toml / uv.lock で別に固定する。
+#
+# ── 選定根拠（対象GPU: seedcore-01 の NVIDIA GeForce RTX 5090）───────
+# 実測（2026-08-31、読み取りのみ）:
+#   GPU compute capability 12.0 / driver 595.84
+#   nvidia-smi の "CUDA Version: 13.2" は、そのdriverが対応する最大の
+#   CUDA版を示す表示であり、ホストにCUDA toolkitが導入されていることや、
+#   使用されるCUDA runtimeの版を意味しない。実際のCUDA runtimeは
+#   cuda/uv.lock が固定する nvidia-* wheel が提供する（torch.version.cuda）。
+#   OS Ubuntu 24.04.4 LTS, kernel 6.8.0-136-generic
+#   NVIDIA Container Toolkit 1.20.0-1, Docker 29.7.2（nvidia runtime登録済み）
+#
+# 1. GPU architecture: RTX 5090 の compute capability は 12.0（NVIDIA
+#    "CUDA GPUs" 一覧）。sm_120 に対応する PyTorch は 2.7 以降
+#    （PyTorch 2.7 リリースノート: "support for the NVIDIA Blackwell GPU
+#    architecture and pre-built wheels for CUDA 12.8"）。CPU側と同じ 2.2.1 は
+#    sm_120 を含まないため、そのままGPUへ流用しない。
+# 2. Python: 本リポジトリのピン留めである 3.11 の wheel（cp311）が cu130
+#    index に存在することを確認済み。
+# 3. 依存整合性: numpy / pandas / scikit-learn / scipy をルートと同一の
+#    ピン留めにしたまま解決できることを uv で確認（77 packages）。
+# 4. 実証: この組合せを実際に導入し、wheel の arch flags に sm_120 が
+#    含まれること（torch._C._cuda_getArchFlags()）と、リポジトリの
+#    テストスイートがこの環境（CPU実行）で通ることを確認済み。
+#    詳細は docs/gpu-verification.md §5.1。
+# 5. driver要件: cu130 は CUDA 13.0 GA 相当で Linux x86_64 driver
+#    >= 580.65.06 を要求する。実機の 595.84 はこれを満たす。
+#
+# 補足（driverの互換性について）: CUDA 12.x でビルドしたアプリケーションも、
+# r580 以降のdriver上でバイナリ後方互換により動作する（NVIDIAの
+# minor version compatibility 文書。表の "< 580" は minor version
+# compatibility が適用される範囲を示すもので、580以降でCUDA 12.xが
+# 使えないという意味ではない）。したがって cu128 系（torch 2.7〜2.11）も
+# 実機driverでは動作しうる。cu130 を採用したのは「driverと同じメジャー
+# 系列でなければならないから」ではなく、上記1〜4を満たす組合せとして
+# 実際に検証したのがこれだからである。
+#
+# バージョンの選び方（方針であって安定性の保証ではない）: cu130 index に
+# cp311 wheel があるのは 2.9.0 以降。その中で最新の 2.13.0（.0 リリース）
+# ではなく、後続の patch release が出ている系列の最新である 2.12.1 を
+# 選んだ。これは変更を小さく保つための方針であり、patch版だから安定して
+# いるという実証ではない。GPU実機での動作は未検証。
+#
+# トレードオフ: cu130 は driver >= 580.65.06 を要求するため、それより古い
+# driver のホストでは動かない（cu128 系なら >= 570.26）。対象ホストを変える
+# 場合は、本ファイルの index と torch のピンを変更して
+# `uv lock --project cuda` を再実行する（ルートの uv.lock は変更しない）。
+#
+# 数値計算まわり（numpy / pandas / scikit-learn / scipy）はルートと同一の
+# ピン留めにして、CPU実行とGPU実行の比較で依存差を最小化する。ただし torch
+# 自体はCPU既定環境（2.2.1）と異なるため、比較時の制約として
+# docs/gpu-verification.md に記録する。
+
+[project]
+name = "genomic-prediction-resnet-hybrid-cuda"
+version = "0.1.0"
+requires-python = "==3.11.*"
+dependencies = [
+    "numpy==1.26.4",
+    "pandas==3.0.3",
+    "scikit-learn==1.8.0",
+    "scipy>=1.17.1",
+    "torch==2.12.1",
+    "torch-geometric==2.7.0",
+    "wandb==0.27.0",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.2",
+]
