@@ -5,13 +5,40 @@
 # 既定のCPU経路の再現性が変わるため、CUDA版は本ディレクトリの
 # pyproject.toml / uv.lock で別に固定する。
 #
-# バージョンの対応:
-#   torch 2.2.1+cu121 / cu121 wheel（CUDA 12.1 runtime、cuDNN 8）
-#   NVIDIA driver は CUDA 12.x のminor version compatibilityにより
-#   >= 525.60.13 が必要（実機での確認は docs/gpu-verification.md を参照）。
+# ── 選定根拠（対象GPU: seedcore-01 の NVIDIA GeForce RTX 5090）───────
+# 実測（2026-08-31、読み取りのみ）:
+#   GPU compute capability 12.0 / driver 595.84 / driver報告のCUDA 13.2
+#   OS Ubuntu 24.04.4 LTS, kernel 6.8.0-136-generic
+#   NVIDIA Container Toolkit 1.20.0-1, Docker 29.7.2（nvidia runtime登録済み）
+#
+# 1. RTX 5090 の compute capability は 12.0（NVIDIA "CUDA GPUs" 一覧）。
+#    sm_120 に対応する PyTorch は 2.7 以降（PyTorch 2.7 リリースノート:
+#    "support for the NVIDIA Blackwell GPU architecture and pre-built wheels
+#    for CUDA 12.8"）。CPU側と同じ 2.2.1 は sm_120 を含まないため、
+#    そのままGPUへ流用しない。
+# 2. 実機の driver 595.84 は CUDA 13.x 系。CUDA Toolkit のdriver要件表では
+#    CUDA 13.0 GA が Linux x86_64 で >=580.65.06、CUDA 12.8 GA が >=570.26、
+#    12.x の minor version compatibility は ">= 525" かつ "< 580" と記載される。
+#    実機driverはCUDA 13系の要件を満たすため、driverと同じメジャー系列である
+#    cu130 ビルドを採用する（12.8ビルドをメジャー跨ぎで動かす前提にしない）。
+# 3. バージョンは cu130 index に cp311 wheel が存在する範囲で、最新の
+#    patch release である 2.12.1 を採用する。最新の 2.13.0 は .0 リリースで
+#    あり、再現性を目的とする本リポジトリでは bugfix を経た patch を優先する
+#    （"最新だから" ではなく、要件1・2を満たす中での選択）。
+# 4. Python は本リポジトリのピン留めどおり 3.11（cu130 index に cp311 wheel が
+#    存在することを確認済み）。
+#
+# トレードオフ: cu130 は driver >= 580.65.06 を要求するため、それより古い
+# driver のホストでは動かない。その場合は sm_120 対応を維持したまま
+# cu128 系（torch 2.7〜2.11、driver >= 570.26）へ切り替える必要があり、
+# 本ファイルの index と torch のピンを変更して `uv lock --project cuda` を
+# 再実行する（ルートの uv.lock は変更しない）。
 #
 # 数値計算まわり（numpy / pandas / scikit-learn / scipy）はルートと同一の
-# ピン留めにして、CPU実行とGPU実行の比較で依存差が出ないようにする。
+# ピン留めにして、CPU実行とGPU実行の比較で依存差を最小化する。ただし torch
+# 自体はCPU既定環境（2.2.1）と異なるため、比較時の制約として
+# docs/gpu-verification.md に記録する。
+
 [project]
 name = "genomic-prediction-resnet-hybrid-cuda"
 version = "0.1.0"
@@ -21,17 +48,17 @@ dependencies = [
     "pandas==3.0.3",
     "scikit-learn==1.8.0",
     "scipy>=1.17.1",
-    "torch==2.2.1",
+    "torch==2.12.1",
     "torch-geometric==2.7.0",
     "wandb==0.27.0",
 ]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu130" }
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [dependency-groups]
