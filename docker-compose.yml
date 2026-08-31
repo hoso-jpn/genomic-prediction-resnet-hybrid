@@ -21,15 +21,20 @@ services:
 
   # GBLUP ベースライン（実データ利用者向けの手動実行経路）
   # data/ はread-only、結果ディレクトリのみ書き込み可能。CIでは実行しない。
+  # W&Bは既定（--wandb-mode disabled）で初期化しないため、API keyも
+  # WANDB_MODE環境変数も不要。offline/onlineにする場合はcommandへ
+  # --wandb-mode を明示的に追加する。
   gblup:
     build: .
     profiles: ["real-data"]
     volumes:
       - ./data:/workspace/data:ro
       - ./gblup_results:/workspace/gblup_results
-    environment:
-      WANDB_MODE: offline
-    command: python gblup_baseline.py
+    command: >
+      python gblup_baseline.py
+      --data-dir data
+      --output-dir gblup_results
+      --expected-families 16
 
   # ResNet ベースライン（実データ利用者向けの手動実行経路）
   # data/ はread-only、結果ディレクトリのみ書き込み可能。CIでは実行しない。
