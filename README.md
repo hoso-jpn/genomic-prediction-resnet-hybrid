@@ -191,7 +191,7 @@ legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち
 
 既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`、PyTorch 2.2.1 CPU build）はCIとDockerの既定経路で使用し、変更していません。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定します。
 
-対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。
+対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。この組合せは`cu130`のwheelを使うため、ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です（cu128系のwheelなら`>= 570.26`）。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。GPU実機での実行は未検証です。
 
 ```bash
 # synthetic 3家系でのGPU smoke（GPUが見えない場合はskipではなく失敗する）
