@@ -35,33 +35,14 @@ jobs:
       - name: Synchronize dependencies
         run: uv sync --frozen --extra gblup --dev
 
+      # 対象は管理対象のPythonコード全体（除外は pyproject.toml の
+      # [tool.ruff] extend-exclude）。新しいモジュールを追加しても、
+      # ここへ書き足さずに検査される。
       - name: Check formatting
-        run: >
-          uv run --frozen --extra gblup
-          ruff format --check
-          gblup_baseline.py
-          resnet_baseline.py
-          soynam_data.py
-          run_manifest.py
-          external_logging.py
-          legacy_guard.py
-          losses.py
-          gene_graph.py
-          tests
+        run: uv run --frozen --extra gblup ruff format --check .
 
       - name: Run Ruff
-        run: >
-          uv run --frozen --extra gblup
-          ruff check
-          gblup_baseline.py
-          resnet_baseline.py
-          soynam_data.py
-          run_manifest.py
-          external_logging.py
-          legacy_guard.py
-          losses.py
-          gene_graph.py
-          tests
+        run: uv run --frozen --extra gblup ruff check .
 
       - name: Run unit tests
         run: >

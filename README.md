@@ -383,20 +383,14 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 ## テストとCI
 
 ```bash
-uv run --frozen --extra gblup \
-  ruff format --check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py losses.py gene_graph.py tests
+uv run --frozen --extra gblup ruff format --check .
 
-uv run --frozen --extra gblup \
-  ruff check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py losses.py gene_graph.py tests
+uv run --frozen --extra gblup ruff check .
 
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
+GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruff format --check .` / `ruff check .`。除外は`pyproject.toml`の`extend-exclude`）、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
@@ -407,7 +401,7 @@ GitHub Actionsでは、対象コードのformat/lint、単体テストスイー�
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
-- CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
+- Ruffの設定は`pyproject.toml`の`[tool.ruff]`に明示しています（`target-version = "py311"`、`line-length = 88`、採用ルールを`select`で列挙）。行長ルール`E501`とzipの`strict`指定（`B905`）は採用していません。前者はformatterのline-lengthで担保し、後者は実行時挙動が変わるため機械的整形とは分けて扱います。
 
 ## データ引用
 
