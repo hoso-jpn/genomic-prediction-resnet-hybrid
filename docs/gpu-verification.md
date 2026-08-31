@@ -29,7 +29,8 @@ CI（GitHub Actions）にGPU runnerはありません。CIの成功はCPU経路�
 | OS | Ubuntu 24.04.4 LTS（kernel 6.8.0-136-generic） |
 | GPU | NVIDIA GeForce RTX 5090（1基） |
 | compute capability | 12.0（sm_120） |
-| NVIDIA driver | 595.84（`nvidia-smi`が報告するCUDA版: 13.2） |
+| NVIDIA driver | 595.84 |
+| `nvidia-smi`のCUDA表示 | 13.2（**driverが対応する最大のCUDA版**を示す表示。ホストにCUDA toolkitが導入されていることや、実行時に使われるCUDA runtimeの版を意味しない。実際のruntimeは`cuda/uv.lock`が固定する`nvidia-*` wheelが提供し、`torch.version.cuda`で確認できる） |
 | VRAM | 32,607 MiB 中 6,579 MiB 使用・**25,527 MiB 空き**（GPU使用率4%） |
 | GPU上で稼働中のプロセス | `llama-server`（6,412 MiB を使用中） |
 | Docker | 29.7.2（`nvidia` runtime登録済み、default runtimeは`runc`） |
@@ -58,14 +59,19 @@ CPU既定環境（ルートの`pyproject.toml` / `uv.lock`、torch 2.2.1 CPU bui
 
 選定根拠:
 
-1. **GPU architecture**: RTX 5090のcompute capabilityは12.0（NVIDIAの"CUDA GPUs"一覧でRTX 50シリーズは12.0）。sm_120に対応するPyTorchは2.7以降で、PyTorch 2.7のリリースノートに "support for the NVIDIA Blackwell GPU architecture and pre-built wheels for CUDA 12.8" と明記されています。**CPU環境と同じ2.2.1はsm_120を含まないため、CUDA wheelへ差し替えるだけでは使えません**（当初案のtorch 2.2.1+cu121はこの理由で不採用）。
-2. **driverとCUDAメジャー系列**: 実機のdriverは595.84でCUDA 13.x系です。CUDA Toolkitのdriver要件表では、CUDA 13.0 GAがLinux x86_64で`>=580.65.06`、CUDA 12.8 GAが`>=570.26`、12.xのminor version compatibilityは`>= 525`かつ`< 580`と記載されています。実機driverはCUDA 13系の要件を満たすため、**driverと同じメジャー系列であるcu130ビルド**を採用し、CUDA 12.8ビルドをメジャー跨ぎで動かす前提は置きません。
-3. **バージョンの選び方**: cu130 indexにcp311 wheelが存在するのは2.9.0以降です。その中で最新の**patch release**である2.12.1を採用しました。最新の2.13.0は`.0`リリースであり、再現性を目的とする本リポジトリではbugfixを経たpatchを優先します。「最新だから」ではなく、要件1・2を満たす候補の中での選択です。
-4. **数値計算依存**: numpy/pandas/scikit-learn/scipyはCPU環境と同一のピン留めにして、比較時の依存差を最小化しています。
+1. **GPU architecture（必須条件）**: RTX 5090のcompute capabilityは12.0（NVIDIAの"CUDA GPUs"一覧でRTX 50シリーズは12.0）。sm_120に対応するPyTorchは2.7以降で、PyTorch 2.7のリリースノートに "support for the NVIDIA Blackwell GPU architecture and pre-built wheels for CUDA 12.8" と明記されています。**CPU環境と同じ2.2.1はsm_120を含まないため、CUDA wheelへ差し替えるだけでは使えません**（当初案のtorch 2.2.1+cu121はこの理由で不採用）。
+2. **Python wheelの存在（必須条件）**: 本リポジトリのピン留めであるPython 3.11のwheel（cp311）がcu130 indexに存在することを確認しています。
+3. **依存整合性（必須条件）**: numpy / pandas / scikit-learn / scipy をルートと同一のピン留めにしたまま解決できることを`uv lock`で確認しています（77 packages）。
+4. **実証（選定の裏付け）**: この組合せを実際に導入し、wheelのarch flagsにsm_120が含まれること、およびリポジトリのテストスイートがこの環境（CPU実行）で通ることを確認しました（§5.1）。**GPU実機での動作は未検証です。**
+5. **driver要件**: cu130はCUDA 13.0 GA相当で、Linux x86_64のdriver `>= 580.65.06` を要求します。実機の595.84はこれを満たします。
+
+**driverの互換性について（重要な訂正）**: 以前の版では「driverと同じCUDAメジャー系列でなければならない」としていましたが、これは誤りです。NVIDIAの[minor version compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)によれば、CUDA 12.xでビルドしたアプリケーションはr580以降のdriverでも**バイナリ後方互換により動作**します（要件表の`< 580`は、minor version compatibilityが適用される範囲を示すもので、580以降でCUDA 12.xが使えないという意味ではありません）。したがってcu128系（torch 2.7〜2.11、CUDA 12.8 GAはdriver `>= 570.26`）も対象ホストで動作しうる選択肢です。cu130を採用したのは「メジャー系列を揃える必要があるから」ではなく、上記1〜4を満たす組合せとして**実際に検証したのがこれだから**です。
+
+**バージョンの選び方（方針であり、安定性の実証ではありません）**: cu130 indexにcp311 wheelが存在するのは2.9.0以降です。その中で、最新の2.13.0（`.0`リリース）ではなく、後続のpatch releaseが出ている系列の最新である2.12.1を選びました。これは変更を小さく保つための方針であり、「patch版だから安定している」という実証ではありません。
 
 トレードオフと制約:
 
-- cu130は**driver >= 580.65.06**を要求します。それより古いdriverのホストでは動きません。その場合はsm_120対応を維持したままcu128系（torch 2.7〜2.11、CUDA 12.8 GAはdriver >= 570.26）へ切り替える必要があり、`cuda/pyproject.toml`のindexとtorchのピンを変更して`uv lock --project cuda`を再実行します（ルートの`uv.lock`は変更しません）。
+- cu130は**driver >= 580.65.06**を要求します。それより古いdriverのホストでは動きません。その場合はsm_120対応を維持したままcu128系（torch 2.7〜2.11、driver `>= 570.26`）へ切り替えられます。`cuda/pyproject.toml`のindexとtorchのピンを変更して`uv lock --project cuda`を再実行します（ルートの`uv.lock`は変更しません）。ただし、その組合せは本記録の§5.1のような導入・テストによる裏付けが別途必要です。
 - **torch自体はCPU既定環境（2.2.1）とCUDA環境（2.12.1）で異なります。** CPU実行とGPU実行を直接比較する場合は、`resnet-cpu-cuda-env`サービス（CUDAイメージでのCPU実行）を使い、torchを揃えてください。GBLUPも同じイメージで実行する`gblup-cuda-env`があります。既定のCPUイメージ（torch 2.2.1）の結果とGPU結果を突き合わせる場合は、この差を比較の制約として明記してください。
 - ベースイメージの選択は**ホストのdriver要件を変えません**（§6を参照）。
 
@@ -119,7 +125,7 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 | 日時(UTC) | 内容 | 結果 |
 |---|---|---|
 | 2026-08-31T00:27Z | `uv sync --frozen --dev --project cuda`（CPUマシン上でCUDA lockを導入） | 成功 |
-| 2026-08-31T00:27Z | 導入されたtorchの確認 | `torch 2.12.1+cu130` / `torch.version.cuda = 13.0` / cuDNN 9.20.0 / PyG 2.7.0 / numpy 1.26.4 |
+| 2026-08-31T00:27Z | 導入されたtorchとCUDA runtimeの確認（ホストのdriver表示とは別物） | `torch 2.12.1+cu130` / `torch.version.cuda = 13.0`（wheel同梱のCUDA runtime）/ cuDNN 9.20.0 / PyG 2.7.0 / numpy 1.26.4 |
 | 2026-08-31T00:27Z | wheelが含むGPU architectureの確認（`torch._C._cuda_getArchFlags()`） | `sm_75 sm_80 sm_86 sm_90 sm_100 sm_120` → **sm_120（RTX 5090）を含む** |
 | 2026-08-31T00:28Z | CUDA環境でのテストスイート（CPU実行、`uv run --project cuda pytest -q`） | **112 passed, 1 skipped**（skipはGPU実機を要するCUDA smoke） |
 | 2026-08-31 | `docker compose config --quiet` / `--profile gpu config` | 成功（gpu profileの4サービスを解決） |
@@ -143,6 +149,7 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 ## 6. 既知の未解決事項
 
 - 実機でのGPU実行は未実施です。§2のディスク空き容量を確保したうえで、まずGPU smoke（synthetic・小規模）から実施してください。
+- `nvidia-smi`が表示するCUDA版（実機では13.2）は、driverが対応する最大のCUDA版です。コンテナ／venv内で実際に使われるCUDA runtimeの版（`torch.version.cuda` = 13.0）とは別物であり、両者を同一視しないでください。
 - **ベースイメージの変更はホスト側の制約を解消しません。** `Dockerfile.cuda`が`python:3.11-slim`を使うのは、CPUイメージと基盤を揃えて依存差を減らすためです。CUDA runtime / cuDNNは`cuda/uv.lock`が固定するwheelが提供します。ホストのdriverが要件（cu130なら`>= 580.65.06`）未満の場合や、GPUのarchitectureが採用したPyTorchビルドの対象外（例: sm_120非対応のビルド）である場合は、`nvidia/cuda`系のベースイメージへ変更しても解決しません。必要なのはdriverの更新、またはGPUに対応したPyTorch/CUDAの組合せへの変更です。
 - GPU実行時の数値はCPU実行と完全一致しません（cuDNNのアルゴリズム選択・非決定的なreduction）。#6の比較では、同一splitと同一の評価尺度を使ったうえで、この差を制約として明記してください。
 - 既定のCPUイメージ（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchが異なります。CPU/GPU比較を行う場合は§3のトレードオフに従い、同一イメージでの実行を使うか、差を明記してください。
