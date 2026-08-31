@@ -107,7 +107,7 @@ PR #20では「バイナリのrun記録内に、リポジトリのオブジェ�
 | `processed_data_hy/y_phenotype_hy.csv`（2,180行） | 66 KB | 2026-03-19 | 2026-03-19 |
 | `genomic_resnet_hybrid.pth`（学習済みモデルの重み） | 2.6 MB | 2026-03-19 | 2026-03-19 |
 
-列名（`dbSNP_ID`、`DEPRECATED-BARCSOYNAMSNP6K_ID`、`Parent_IA3023`、`Corrected Strain`）はSoyNAMの配布形式と一致しますが、**列名の一致は形式の一致であって出所の証明ではありません**。出典・再配布条件の調査結果は[docs/data-provenance.md](data-provenance.md)にまとめています（`genomic_resnet_hybrid.pth`については、同一commitの`train.py`が乱数データで学習して保存したものであることを、入力次元・アーキテクチャの一致から確認済み。生データ・派生物については配布元の条件が未確認）。
+列名（`dbSNP_ID`、`DEPRECATED-BARCSOYNAMSNP6K_ID`、`Parent_IA3023`、`Corrected Strain`）はSoyNAMの配布形式と一致しますが、**列名の一致は形式の一致であって出所の証明ではありません**。出典・再配布条件の調査結果は[docs/data-provenance.md](data-provenance.md)にまとめています（`genomic_resnet_hybrid.pth`は、同一commitにある乱数データで学習して保存するコードと構造・形状が整合しますが、**当該ファイルと生成実行との対応は未確認**です。生データ・派生物は取得経緯が利用者の回答待ち、配布元の条件が未確認）。
 
 本対応では履歴の書き換え・force pushは行いません。必要と判断される場合も、影響範囲（既存clone・fork・PR参照の失効、GitHub側に残る到達不能オブジェクトの扱い）と承認を別途確認してください。
 
