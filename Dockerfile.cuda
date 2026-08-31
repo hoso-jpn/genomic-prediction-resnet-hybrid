@@ -6,8 +6,9 @@
 # コメントと docs/gpu-verification.md を参照。
 #
 # 対象GPU: NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）
-# 採用: torch 2.12.1+cu130（PyTorch 2.7以降がBlackwell対応、cu130は
-#       CUDA 13.0 GA相当で Linux x86_64 driver >= 580.65.06 を要求）
+# 採用: torch 2.12.1+cu130（sm_120対応はPyTorch 2.7以降。cu130は
+#       CUDA 13.0 GA相当で Linux x86_64 driver >= 580.65.06 を要求し、
+#       対象ホストの 595.84 はこれを満たす）
 #
 # CUDA runtime / cuDNN は cuda/uv.lock で固定した nvidia-* wheel が提供する
 # ため、ベースイメージはCPU版と同じ python:3.11-slim を使う（数値計算まわりの
@@ -18,6 +19,10 @@
 # 未満、またはGPUのarchitectureが採用したPyTorchビルドの対象外である場合、
 # ベースイメージの変更では解消しない（driver更新、またはGPUに対応した
 # PyTorch/CUDAの組合せへの変更が必要）。詳細は docs/gpu-verification.md。
+#
+# nvidia-smi が表示する CUDA 版は、driverが対応する最大のCUDA版であり、
+# コンテナ内で使用されるCUDA runtimeの版（cuda/uv.lock が固定する
+# nvidia-* wheel が提供）とは別物である。
 #
 # 実機での動作確認状況は docs/gpu-verification.md を参照。
 FROM python:3.11-slim
