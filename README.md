@@ -189,7 +189,9 @@ legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち
 
 ## GPU実行環境
 
-既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`）はPyTorchをCPU indexへ固定しており、CIとDockerの既定経路はこちらを使います。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定し、CPU側のlockとCI経路には影響させません。
+既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`、PyTorch 2.2.1 CPU build）はCIとDockerの既定経路で使用し、変更していません。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定します。
+
+対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。
 
 ```bash
 # synthetic 3家系でのGPU smoke（GPUが見えない場合はskipではなく失敗する）
@@ -199,7 +201,8 @@ docker compose --profile gpu run --rm gpu-smoke
 # 実データのResNet（CUDA）
 docker compose --profile gpu run --rm resnet-gpu
 
-# 比較用GBLUP（同一イメージでのCPU実行）
+# 比較用: 同一イメージ・同一torchでのCPU実行
+docker compose --profile gpu run --rm resnet-cpu-cuda-env
 docker compose --profile gpu run --rm gblup-cuda-env
 ```
 
@@ -213,6 +216,7 @@ docker compose --profile gpu run --rm gblup-cuda-env
 |---|---|
 | CPU unit test・synthetic CPU smoke | CIで実行・成功 |
 | CUDA要求時の明確な失敗（GPU不在時） | CPU環境で確認済み |
+| CUDA環境の導入とテストスイート（CPU実行） | 確認済み（torch 2.12.1+cu130、112 passed / 1 skipped。wheelが`sm_120`を含むことも確認） |
 | synthetic GPU smoke（`tests/test_gpu_smoke.py`） | **GPU実機未検証**（CPU環境ではskip、CIにGPU runnerなし） |
 | 実データのGPU本実験・精度比較 | **未実施**（Issue #6） |
 
@@ -269,7 +273,7 @@ gblup_results/
 |---|---|---|
 | 検証済み（`unit-test`, `cpu-smoke`） | なし | `docker compose up`／`docker compose run <service>`で常に対象 |
 | 実データ（`gblup`, `resnet`） | `real-data` | `--profile real-data`を明示した場合のみ |
-| GPU（`gpu-smoke`, `resnet-gpu`, `gblup-cuda-env`） | `gpu` | `--profile gpu`を明示した場合のみ（CUDAイメージ） |
+| GPU（`gpu-smoke`, `resnet-gpu`, `resnet-cpu-cuda-env`, `gblup-cuda-env`） | `gpu` | `--profile gpu`を明示した場合のみ（CUDAイメージ） |
 | legacy/experimental（`preprocess`, `train`, `train-gpu`, `sweep-init`, `sweep-agent`, `gblup-baseline`, `dev`, `create-weights`, `create-graph-data`, `train-gnn`） | `legacy` | `--profile legacy`を明示した場合のみ |
 
 `docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`gpu`・`legacy`のサービスは既定では起動しません。
@@ -393,8 +397,9 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。
-- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は定義済みですが、GPU実機での動作確認は未実施です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
+- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は対象GPU（RTX 5090）に合わせて選定済みで、CPU側で導入・テスト・sm_120対応まで確認していますが、**GPU実機での実行とイメージbuildは未実施**です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
+- 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
 - Ruffの設定は`pyproject.toml`の`[tool.ruff]`に明示しています（`target-version = "py311"`、`line-length = 88`、採用ルールを`select`で列挙）。行長ルール`E501`とzipの`strict`指定（`B905`）は採用していません。前者はformatterのline-lengthで担保し、後者は実行時挙動が変わるため機械的整形とは分けて扱います。
 

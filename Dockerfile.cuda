@@ -2,12 +2,22 @@
 #
 # 既定のCPUイメージ（Dockerfile）とは別のイメージ。依存関係は
 # cuda/pyproject.toml と cuda/uv.lock で固定し、ルートの uv.lock と
-# CIの既定経路には影響させない。
+# CIの既定経路には影響させない。選定根拠は cuda/pyproject.toml の
+# コメントと docs/gpu-verification.md を参照。
+#
+# 対象GPU: NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）
+# 採用: torch 2.12.1+cu130（PyTorch 2.7以降がBlackwell対応、cu130は
+#       CUDA 13.0 GA相当で Linux x86_64 driver >= 580.65.06 を要求）
 #
 # CUDA runtime / cuDNN は cuda/uv.lock で固定した nvidia-* wheel が提供する
 # ため、ベースイメージはCPU版と同じ python:3.11-slim を使う（数値計算まわりの
-# 依存差を減らし、CPU実行との比較条件を揃えるため）。ホスト側には NVIDIA
-# driver と NVIDIA Container Toolkit が必要。
+# 依存差を減らし、CPU実行との比較条件を揃えるため）。ホスト側には上記以上の
+# NVIDIA driver と NVIDIA Container Toolkit が必要。
+#
+# 注意: ベースイメージを変えてもホストのdriverは変わらない。driverが要件
+# 未満、またはGPUのarchitectureが採用したPyTorchビルドの対象外である場合、
+# ベースイメージの変更では解消しない（driver更新、またはGPUに対応した
+# PyTorch/CUDAの組合せへの変更が必要）。詳細は docs/gpu-verification.md。
 #
 # 実機での動作確認状況は docs/gpu-verification.md を参照。
 FROM python:3.11-slim
@@ -17,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH="/opt/venv/bin:${PATH}" \
-    GPRH_ENVIRONMENT=cuda-12.1-torch-2.2.1
+    GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1
 
 # uv: バージョンを固定して導入する（CPUイメージ・CIと同一バージョン）
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/

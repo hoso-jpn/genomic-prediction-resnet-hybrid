@@ -2,49 +2,79 @@
 
 Issue #13で整備したCUDA実行環境の状態を記録します。**実機での確認が済んでいない項目は「未実施」と明記し、実施済みとして扱いません。**
 
-## 1. 現在の状態（2026-08-30時点）
+## 1. 現在の状態（2026-08-31時点）
 
 | 項目 | 状態 |
 |---|---|
-| CUDA用の依存固定（`cuda/pyproject.toml`・`cuda/uv.lock`） | 作成済み・CPU lockとは独立 |
-| CUDAイメージ定義（`Dockerfile.cuda`） | 作成済み |
-| GPU起動経路（`docker compose --profile gpu`） | 定義済み・`docker compose config`で検証 |
+| 対象GPUホストの構成確認（読み取りのみ） | **実施済み**（§2の実測値） |
+| CUDA用の依存固定（`cuda/pyproject.toml`・`cuda/uv.lock`） | 作成済み・CPU lockとは独立。対象GPUのcompute capabilityに合わせて選定（§3） |
+| CUDA wheelがsm_120を含むことの確認 | **実施済み**（CPU側で`torch._C._cuda_getArchFlags()`を確認、§5.1） |
+| CUDA環境でのテストスイート（CPU実行） | **実施済み**（112 passed / 1 skipped、§5.1） |
+| CUDAイメージ定義（`Dockerfile.cuda`） | 作成済み・**イメージbuildは未実施** |
+| GPU起動経路（`docker compose --profile gpu`） | 定義済み・`docker compose config`で検証・**起動は未実施** |
 | syntheticデータのGPU smoke（`tests/test_gpu_smoke.py`） | 実装済み・**GPU実機では未実施**（CPU環境ではskip） |
 | CUDA要求時の明確な失敗（`--device cuda`） | CPU環境で実行し確認済み |
 | 既定のCPU unit/smoke・Docker経路 | 変更なし・成功を確認 |
-| 実験対象GPUのarchitecture / OS / driverの実機確認 | **未実施**（GPUを利用できる環境が未確保） |
 | GPU上でのforward/backward・LOFO完走 | **未実施** |
 | 実データでの本実験（#6） | **未実施**（本Issueの対象外） |
 
 CI（GitHub Actions）にGPU runnerはありません。CIの成功はCPU経路の確認であり、GPU経路の確認ではありません。
 
-## 2. 固定した依存関係
+## 2. 対象GPUホストの実測値（seedcore-01、2026-08-31、読み取りのみ）
 
-CPU既定環境（ルートの`pyproject.toml` / `uv.lock`）は変更していません。CUDA環境は`cuda/`配下で独立に固定します。
+過去の構成情報ではなく、当日にホストへ接続して読み取った値です。設定変更・サービス停止・GPUを使用する実行は行っていません。
+
+| 項目 | 実測値 |
+|---|---|
+| OS | Ubuntu 24.04.4 LTS（kernel 6.8.0-136-generic） |
+| GPU | NVIDIA GeForce RTX 5090（1基） |
+| compute capability | 12.0（sm_120） |
+| NVIDIA driver | 595.84（`nvidia-smi`が報告するCUDA版: 13.2） |
+| VRAM | 32,607 MiB 中 6,579 MiB 使用・**25,527 MiB 空き**（GPU使用率4%） |
+| GPU上で稼働中のプロセス | `llama-server`（6,412 MiB を使用中） |
+| Docker | 29.7.2（`nvidia` runtime登録済み、default runtimeは`runc`） |
+| NVIDIA Container Toolkit | 1.20.0-1 |
+| ルートFSの空き容量 | **230 MiB**（`/dev/nvme0n1p2`、183 GiB中） |
+| ホストのPython / uv | Python 3.12.3 / uv 未導入 |
+
+### 実機実行の前に解決が必要な点
+
+- **ディスク空き容量が230 MiBしかありません。** CUDAイメージのbuild（PyTorch + CUDA runtime wheelで数GB規模）はこの空き容量では完了しません。実機でのbuild・実行の前に、空き容量の確保が必要です。
+- GPUは共有中です（`llama-server`が6.4 GiBを使用）。本Issueの範囲では既存サービスを停止しません。GPU smokeの所要VRAMは小規模（synthetic 3家系・1 epoch）ですが、本実験（#6）を行う場合は、空きVRAMと既存サービスへの影響を事前に確認してください。
+- ホストにuvが無いため、非Docker経路を使う場合は導入が必要です（Docker経路であれば不要）。
+
+## 3. 依存関係の選定と根拠
+
+CPU既定環境（ルートの`pyproject.toml` / `uv.lock`、torch 2.2.1 CPU build）は変更していません。CUDA環境は`cuda/`配下で独立に固定します。
 
 | 項目 | 値 |
 |---|---|
-| Python | 3.11 |
-| PyTorch | `2.2.1+cu121`（`https://download.pytorch.org/whl/cu121`） |
-| CUDA runtime / cuDNN | `cuda/uv.lock`が固定する`nvidia-*` wheel（CUDA 12.1系、cuDNN 8） |
-| PyTorch Geometric | 2.7.0（純Python、CPU/CUDA共通） |
-| numpy / pandas / scikit-learn / scipy | ルートと同一のピン留め |
+| Python | 3.11（リポジトリのピン留めどおり。cu130 indexにcp311 wheelが存在することを確認） |
+| PyTorch | `2.12.1+cu130`（`https://download.pytorch.org/whl/cu130`） |
+| CUDA / cuDNN | wheel同梱（`torch.version.cuda` = 13.0、cuDNN 9.20.0） |
+| PyTorch Geometric | 2.7.0（純Python。CPU環境と同一） |
+| numpy / pandas / scikit-learn / scipy | ルートと同一のピン留め（1.26.4 / 3.0.3 / 1.8.0 / 1.17.1） |
 | uv | 0.12.3（CPUイメージ・CIと同一） |
 
-ホスト側の要件（**公式ドキュメントに基づく想定値であり、実機未確認**）:
+選定根拠:
 
-- NVIDIA driver: CUDA 12.xのminor version compatibilityにより`>= 525.60.13`
-- NVIDIA Container Toolkit（Docker経由でGPUを渡す場合）
-- compute capability: PyTorch 2.2.1のcu121ビルドが対応する範囲（sm_50〜sm_90）
+1. **GPU architecture**: RTX 5090のcompute capabilityは12.0（NVIDIAの"CUDA GPUs"一覧でRTX 50シリーズは12.0）。sm_120に対応するPyTorchは2.7以降で、PyTorch 2.7のリリースノートに "support for the NVIDIA Blackwell GPU architecture and pre-built wheels for CUDA 12.8" と明記されています。**CPU環境と同じ2.2.1はsm_120を含まないため、CUDA wheelへ差し替えるだけでは使えません**（当初案のtorch 2.2.1+cu121はこの理由で不採用）。
+2. **driverとCUDAメジャー系列**: 実機のdriverは595.84でCUDA 13.x系です。CUDA Toolkitのdriver要件表では、CUDA 13.0 GAがLinux x86_64で`>=580.65.06`、CUDA 12.8 GAが`>=570.26`、12.xのminor version compatibilityは`>= 525`かつ`< 580`と記載されています。実機driverはCUDA 13系の要件を満たすため、**driverと同じメジャー系列であるcu130ビルド**を採用し、CUDA 12.8ビルドをメジャー跨ぎで動かす前提は置きません。
+3. **バージョンの選び方**: cu130 indexにcp311 wheelが存在するのは2.9.0以降です。その中で最新の**patch release**である2.12.1を採用しました。最新の2.13.0は`.0`リリースであり、再現性を目的とする本リポジトリではbugfixを経たpatchを優先します。「最新だから」ではなく、要件1・2を満たす候補の中での選択です。
+4. **数値計算依存**: numpy/pandas/scikit-learn/scipyはCPU環境と同一のピン留めにして、比較時の依存差を最小化しています。
 
-実機で確認したら、下記の§4へ実際の値を追記してください。手動の`pip install`で上書きした環境は再現手順として扱いません。
+トレードオフと制約:
 
-## 3. 手順
+- cu130は**driver >= 580.65.06**を要求します。それより古いdriverのホストでは動きません。その場合はsm_120対応を維持したままcu128系（torch 2.7〜2.11、CUDA 12.8 GAはdriver >= 570.26）へ切り替える必要があり、`cuda/pyproject.toml`のindexとtorchのピンを変更して`uv lock --project cuda`を再実行します（ルートの`uv.lock`は変更しません）。
+- **torch自体はCPU既定環境（2.2.1）とCUDA環境（2.12.1）で異なります。** CPU実行とGPU実行を直接比較する場合は、`resnet-cpu-cuda-env`サービス（CUDAイメージでのCPU実行）を使い、torchを揃えてください。GBLUPも同じイメージで実行する`gblup-cuda-env`があります。既定のCPUイメージ（torch 2.2.1）の結果とGPU結果を突き合わせる場合は、この差を比較の制約として明記してください。
+- ベースイメージの選択は**ホストのdriver要件を変えません**（§6を参照）。
 
-### 3.1 Dockerを使う場合
+## 4. 手順
+
+### 4.1 Dockerを使う場合
 
 ```bash
-# イメージのbuild（CPUイメージとは別）
+# イメージのbuild（CPUイメージとは別。数GB規模のダウンロードが発生する）
 docker compose --profile gpu build gpu-smoke
 
 # syntheticな3家系でのGPU smoke
@@ -54,15 +84,16 @@ docker compose --profile gpu run --rm gpu-smoke
 # 実データのResNet（CUDA）
 docker compose --profile gpu run --rm resnet-gpu
 
-# 比較用のGBLUP（同一イメージでのCPU実行）
+# 比較用: 同一イメージ・同一torchでのCPU実行
+docker compose --profile gpu run --rm resnet-cpu-cuda-env
 docker compose --profile gpu run --rm gblup-cuda-env
 ```
 
-### 3.2 Dockerを使わない場合
+### 4.2 Dockerを使わない場合
 
 ```bash
 uv sync --frozen --dev --project cuda
-GPRH_ENVIRONMENT=cuda-12.1-torch-2.2.1 \
+GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
   uv run --frozen --project cuda \
   python resnet_baseline.py \
   --data-dir data --output-dir resnet_results --device cuda
@@ -70,7 +101,7 @@ GPRH_ENVIRONMENT=cuda-12.1-torch-2.2.1 \
 
 `GPRH_ENVIRONMENT`は`metadata.json`の`environment_label`へ記録され、どの固定環境で実行したかを後から識別できます（Dockerイメージでは自動的に設定されます）。
 
-### 3.3 記録される情報
+### 4.3 記録される情報
 
 `resnet_results/artifacts/<run_id>/metadata.json`に次が入ります。
 
@@ -81,23 +112,37 @@ GPRH_ENVIRONMENT=cuda-12.1-torch-2.2.1 \
 - `environment_label`（`GPRH_ENVIRONMENT`）
 - `library_versions`（numpy / pandas / scikit-learn / torch / torch-geometric）
 
-## 4. 実機検証ログ
+## 5. 検証ログ
 
-実施した場合のみ追記します。未実施の項目を埋めないでください。
+### 5.1 実施済み（CPU側で確認できる範囲）
 
-| 日時(UTC) | 実行コマンド | GPU / driver / CUDA | イメージ・lock | 結果 | run_id |
-|---|---|---|---|---|---|
-| （未実施） | | | | | |
+| 日時(UTC) | 内容 | 結果 |
+|---|---|---|
+| 2026-08-31T00:27Z | `uv sync --frozen --dev --project cuda`（CPUマシン上でCUDA lockを導入） | 成功 |
+| 2026-08-31T00:27Z | 導入されたtorchの確認 | `torch 2.12.1+cu130` / `torch.version.cuda = 13.0` / cuDNN 9.20.0 / PyG 2.7.0 / numpy 1.26.4 |
+| 2026-08-31T00:27Z | wheelが含むGPU architectureの確認（`torch._C._cuda_getArchFlags()`） | `sm_75 sm_80 sm_86 sm_90 sm_100 sm_120` → **sm_120（RTX 5090）を含む** |
+| 2026-08-31T00:28Z | CUDA環境でのテストスイート（CPU実行、`uv run --project cuda pytest -q`） | **112 passed, 1 skipped**（skipはGPU実機を要するCUDA smoke） |
+| 2026-08-31 | `docker compose config --quiet` / `--profile gpu config` | 成功（gpu profileの4サービスを解決） |
 
-記入例（実施後に置き換える）:
+### 5.2 未実施（GPU実機）
+
+| 項目 | 状態 |
+|---|---|
+| `docker compose --profile gpu build gpu-smoke` | 未実施（実機のディスク空き容量が230 MiB。§2） |
+| `docker compose --profile gpu run --rm gpu-smoke` | 未実施 |
+| CUDA上でのforward/backward・LOFO完走・run artifacts保存 | 未実施 |
+| GPU要求時の不在・不一致の挙動（実機） | 未実施（GPUの無い環境での失敗のみ確認済み） |
+| 実データのGPU本実験・精度・計算コスト比較 | 未実施（#6） |
+
+実施した場合は、次の形式でこの表の下へ追記してください。
 
 ```text
-2026-09-01T00:00:00Z | docker compose --profile gpu run --rm gpu-smoke |
-  <GPU名> / <driver> / <CUDA> | Dockerfile.cuda + cuda/uv.lock | 3/3 fold完走 | <run_id>
+<UTC日時> | <実行コマンド> | <GPU名 / driver / CUDA> | <イメージ・lockの識別> | <結果> | <run_id>
 ```
 
-## 5. 既知の未解決事項
+## 6. 既知の未解決事項
 
-- 対象GPUのarchitecture・OS・driverの組合せが未確定のため、`cuda/uv.lock`のCUDA版（12.1）が実機に適合するかは未確認です。適合しない場合は`cuda/pyproject.toml`のindexを対応する版へ変更し、`uv lock --project cuda`で固定し直してください（ルートのlockは変更しない）。
-- `Dockerfile.cuda`はCPUイメージと同じ`python:3.11-slim`をベースに、CUDA runtimeをwheelから取得します。ホストのdriverが古くwheel側のCUDA 12.1を満たさない場合は、対応する`nvidia/cuda`ベースイメージへの変更が必要になる可能性があります。
+- 実機でのGPU実行は未実施です。§2のディスク空き容量を確保したうえで、まずGPU smoke（synthetic・小規模）から実施してください。
+- **ベースイメージの変更はホスト側の制約を解消しません。** `Dockerfile.cuda`が`python:3.11-slim`を使うのは、CPUイメージと基盤を揃えて依存差を減らすためです。CUDA runtime / cuDNNは`cuda/uv.lock`が固定するwheelが提供します。ホストのdriverが要件（cu130なら`>= 580.65.06`）未満の場合や、GPUのarchitectureが採用したPyTorchビルドの対象外（例: sm_120非対応のビルド）である場合は、`nvidia/cuda`系のベースイメージへ変更しても解決しません。必要なのはdriverの更新、またはGPUに対応したPyTorch/CUDAの組合せへの変更です。
 - GPU実行時の数値はCPU実行と完全一致しません（cuDNNのアルゴリズム選択・非決定的なreduction）。#6の比較では、同一splitと同一の評価尺度を使ったうえで、この差を制約として明記してください。
+- 既定のCPUイメージ（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchが異なります。CPU/GPU比較を行う場合は§3のトレードオフに従い、同一イメージでの実行を使うか、差を明記してください。
