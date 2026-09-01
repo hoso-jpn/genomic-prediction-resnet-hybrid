@@ -185,6 +185,20 @@ gblup_results/
 
 `metadata.json`の`git_commit`はベストエフォートです。Dockerイメージは`.dockerignore`で`.git/`をビルドコンテキストから除外しているため、コンテナ内で実行した場合は取得できず`null`になります。明示的に記録したい場合は、実行前に環境変数`GIT_COMMIT_SHA`を設定してください（`git`コマンドより優先されます）。
 
+### 生成物とGit管理
+
+再現性の証跡は`<output-dir>/artifacts/<run_id>/`のrun artifactsが担います。次の生成物はGitで追跡しません（`.gitignore`で除外）。
+
+| 生成物 | 生成方法 |
+|---|---|
+| `wandb/`（W&Bのローカルrun directory） | `--wandb-mode offline` / `online`での実行時に生成 |
+| `pretrained_models/*.pt`（ダミーCNN重み） | `python create_dummy_pretrained_weights.py`（既定 seed=42） |
+| `gblup_results/`・`resnet_results/`・`logs/`・`processed_data_hy/` | 各スクリプトの実行時に生成 |
+
+`.gitignore`は既に追跡されているファイルには遡及しないため、過去に追跡されていた`wandb/`配下のログと`pretrained_models/dummy_cnn_weights.pt`は、Issue #15で明示的に追跡を停止しました（ローカルファイルは削除していません）。対象一覧、秘密情報の確認方法と結果（値は非掲載）、再生成手順は[docs/generated-artifacts.md](docs/generated-artifacts.md)にまとめています。
+
+ダミー重みはランダム初期化した重みであり、事前学習済みモデルの性能証跡ではありません。検証済みベースライン（`gblup_baseline.py` / `resnet_baseline.py`）の実行には不要です。
+
 ### 未対応（Issue #6予定）
 
 `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）やCLIオプションは、本Issue #5では追加していません。Issue #6（GPU本実験・GBLUP/ResNet比較）で対応予定です。
