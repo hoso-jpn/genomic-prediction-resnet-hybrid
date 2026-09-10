@@ -4,7 +4,7 @@
 
 SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量を予測し、未知の家系への外挿性能を評価する研究用リポジトリです。
 
-現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweepはexperimentalとして分離しています。Docker / Docker Composeは、単体テストとResNet CPU smokeについて検証済みです。
+現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweepはexperimentalとして分離しています。Docker / Docker Composeは、単体テストとCPU smoke（GBLUP・ResNet）について検証済みです。
 
 ## 実装状況
 
@@ -13,11 +13,13 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
-| 単体テスト・synthetic CPU smoke | CI実行 | `tests/`, `.github/workflows/ci.yml` |
+| 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
 | Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
 | Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
-| 旧ResNet学習・W&B Sweep | experimental | `main.py`, `sweep_config.yaml` |
-| GNN | experimental | `train_gnn.py` |
+| CUDA実行環境（GPU smoke・resnet GPU経路） | 準備済み・**GPU実機未検証** | `Dockerfile.cuda`, `cuda/`, `docs/gpu-verification.md` |
+| 旧ResNet学習・W&B Sweep | experimental（`--allow-legacy`必須） | `main.py`, `sweep_config.yaml` |
+| 旧前処理 | experimental（`--allow-legacy`必須） | `preprocess.py` |
+| GNN | experimental（`--allow-legacy`必須） | `train_gnn.py` |
 
 「検証済み」は、入力整合性・split・前処理・出力契約とCPU上の実行経路を自動テストまたはスモークテストで確認したことを意味します。予測精度の優位性や大規模GPU実験の再現を保証するものではありません。
 
@@ -51,7 +53,7 @@ Rおよび`sommer`は、この検証済みGBLUP経路では使用しません。
 
 - Python `3.11.x`
 - [uv](https://docs.astral.sh/uv/)（CI検証バージョン: `0.12.3`）
-- CPU実行を標準経路とするPyTorch `2.2.1`
+- CPU実行を標準経路とするPyTorch `2.2.1`（GPU実行は`cuda/`の独立した固定環境を使用、[GPU実行環境](#gpu実行環境)参照）
 
 ```bash
 git clone https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid.git
@@ -106,18 +108,32 @@ loaderは読み込み時に次を検証します。
 
 ### GBLUP baseline
 
-現在のGBLUP CLIは`data/`、16 family、`gblup_results/`を前提とします。W&Bへ送信せずローカルで再現する場合はoffline modeを使います。
-
 ```bash
-WANDB_MODE=offline \
-  uv run --frozen --extra gblup \
-  python gblup_baseline.py
+uv run --frozen --extra gblup \
+  python gblup_baseline.py \
+  --data-dir data \
+  --output-dir gblup_results \
+  --expected-families 16
 ```
+
+主なCLI引数は`--data-dir`、`--output-dir`、`--expected-families`、`--wandb-mode`です。既定値は`data`、`gblup_results`、`16`、`disabled`で、引数を省略した場合の入力・出力・家系数はこれまでと同じです。外部サービスの認証情報は不要です。
+
+`--expected-families`は家系数チェックを無効化するためのものではなく、期待する家系数の指定です。読み込んだデータの家系数が一致しない場合は実行前に失敗します（LOFO-CVの都合上、2未満は指定できません）。
 
 出力:
 
 ```text
 gblup_results/oof_predictions.csv
+```
+
+3 familyのsyntheticデータなど、16家系以外のデータで配線を確認する例:
+
+```bash
+uv run --frozen --extra gblup \
+  python gblup_baseline.py \
+  --data-dir /path/to/synthetic_data \
+  --output-dir gblup_smoke_results \
+  --expected-families 3
 ```
 
 ### ResNet baseline
@@ -148,6 +164,62 @@ uv run --frozen --extra gblup \
 
 1 epochの実行は配線と出力契約の確認用であり、予測精度の評価には使用しません。
 
+## W&B（Weights & Biases）の扱い
+
+GBLUPの外部ロギングは`--wandb-mode`だけで決まります。
+
+| `--wandb-mode` | W&Bの初期化 | 外部送信 | ローカル出力 |
+|---|---|---|---|
+| `disabled`（既定） | 行わない（`import wandb`もしない） | なし | run成果物のみ |
+| `offline` | 行う | なし | run成果物 + ローカルW&B run directory |
+| `online` | 行う | あり（API key等の認証情報が必要） | run成果物 + W&Bサービス上のrun |
+
+優先順位は次のとおりです。
+
+- CLIの`--wandb-mode`が唯一の決定要素です。`WANDB_MODE`等の環境変数でmodeを変更することはできません。
+- `offline`・`online`を選んだ場合、`wandb.init`の直前にプロセスの`WANDB_MODE`を選択値へ上書きし、同じ値を`wandb.init(mode=...)`にも渡します。周囲の環境変数が`offline`を`online`へ引き上げることはありません。
+- 既定は`disabled`です。`WANDB_MODE=online`が設定された環境で引数なしに実行しても、W&Bは初期化されません。`online`にできるのは`--wandb-mode online`を明示した場合だけです。
+- CLI引数の検証とデータ読み込み・家系数チェックは、W&Bの初期化より前に行います。引数や入力が不正な実行がW&B上にrunを作ることはありません。
+
+ResNet（`resnet_baseline.py`）はW&Bを使用しません。実行の記録は両ベースラインとも[成果物](#成果物)節のrun artifactsが担います。
+
+legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち、既定は`disabled`です。`--allow-legacy`（[legacy / experimental経路](#legacy--experimental経路)）は旧経路の実行許可であり、外部送信の許可ではありません。両者は別々に明示する必要があります。
+
+コードの公開は、研究データやログを外部サービスへ送信する許可を意味しません。`online`は利用者自身が明示的に選ぶ操作です。
+
+## GPU実行環境
+
+既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`、PyTorch 2.2.1 CPU build）はCIとDockerの既定経路で使用し、変更していません。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定します。
+
+対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。この組合せは`cu130`のwheelを使うため、ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です（cu128系のwheelなら`>= 570.26`）。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。GPU実機での実行は未検証です。
+
+```bash
+# synthetic 3家系でのGPU smoke（GPUが見えない場合はskipではなく失敗する）
+docker compose --profile gpu build gpu-smoke
+docker compose --profile gpu run --rm gpu-smoke
+
+# 実データのResNet（CUDA）
+docker compose --profile gpu run --rm resnet-gpu
+
+# 比較用: 同一イメージ・同一torchでのCPU実行
+docker compose --profile gpu run --rm resnet-cpu-cuda-env
+docker compose --profile gpu run --rm gblup-cuda-env
+```
+
+- `resnet_baseline.py --device cuda`はCUDAが使えない場合に明確に失敗し、CPUへ黙って切り替わりません。実際に使われたdeviceは`metadata.json`の`device_resolved`で確認できます。
+- `metadata.json`にはGPU名、compute capability、CUDA/cuDNN、driver（`nvidia-smi`から取得できた場合）、および`GPRH_ENVIRONMENT`に基づく`environment_label`（どの固定環境で実行したか）を記録します。
+- ホストにはNVIDIA driverとNVIDIA Container Toolkitが必要です。バージョン対応と手順、**未検証事項**は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。
+
+検証の区別:
+
+| 区分 | 状態 |
+|---|---|
+| CPU unit test・synthetic CPU smoke | CIで実行・成功 |
+| CUDA要求時の明確な失敗（GPU不在時） | CPU環境で確認済み |
+| CUDA環境の導入とテストスイート（CPU実行） | 確認済み（torch 2.12.1+cu130、112 passed / 1 skipped。wheelが`sm_120`を含むことも確認） |
+| synthetic GPU smoke（`tests/test_gpu_smoke.py`） | **GPU実機未検証**（CPU環境ではskip、CIにGPU runnerなし） |
+| 実データのGPU本実験・精度比較 | **未実施**（Issue #6） |
+
 ## 成果物
 
 GBLUP・ResNetは、実行ごとに再現性の追跡・監査に必要な成果物を`<output-dir>/artifacts/<run_id>/`へ保存します（`gblup_results/artifacts/...`・`resnet_results/artifacts/...`）。ルート直下の共通`artifacts/`は使用せず、`docker-compose.yml`の既存bind mount（`./gblup_results`・`./resnet_results`）だけで書き込み先を確保できます。
@@ -158,6 +230,8 @@ gblup_results/
   artifacts/
     <run_id>/
       metadata.json          # run_id、git commit、依存バージョン、入力ファイル情報など
+                             #   GBLUPは hyperparameters.expected_family_count と
+                             #   external_logging.mode（W&Bのmode）も記録する
       split.json             # outer（LOFO）split。GBLUPは inner: null
       preprocessing.json     # 欠損率・MAF等の設定値とfold単位の要約統計
       preprocessing_arrays.npz  # fold単位の実数値配列（marker mask、imputation mean等）
@@ -205,7 +279,7 @@ gblup_results/
 
 ## Docker / Docker Compose
 
-`Dockerfile`は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
+`Dockerfile`（CPU既定イメージ）は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。GPU用の`Dockerfile.cuda`は`cuda/`配下の別lockを使う独立したイメージです（[GPU実行環境](#gpu実行環境)）。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
 
 `docker-compose.yml`のサービスは次の3系統に分かれます。
 
@@ -213,9 +287,10 @@ gblup_results/
 |---|---|---|
 | 検証済み（`unit-test`, `cpu-smoke`） | なし | `docker compose up`／`docker compose run <service>`で常に対象 |
 | 実データ（`gblup`, `resnet`） | `real-data` | `--profile real-data`を明示した場合のみ |
+| GPU（`gpu-smoke`, `resnet-gpu`, `resnet-cpu-cuda-env`, `gblup-cuda-env`） | `gpu` | `--profile gpu`を明示した場合のみ（CUDAイメージ） |
 | legacy/experimental（`preprocess`, `train`, `train-gpu`, `sweep-init`, `sweep-agent`, `gblup-baseline`, `dev`, `create-weights`, `create-graph-data`, `train-gnn`） | `legacy` | `--profile legacy`を明示した場合のみ |
 
-`docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`legacy`のサービスは、検証済みベースライン経路ではないため既定では起動しません。
+`docker compose up`をprofile指定なしで実行した場合、起動対象は`unit-test`・`cpu-smoke`だけです。`real-data`・`gpu`・`legacy`のサービスは既定では起動しません。
 
 ### 単体テスト（unit-test）
 
@@ -228,7 +303,7 @@ docker compose run --rm unit-test
 
 ### CPU smoke test（cpu-smoke）
 
-3 familyのsynthetic dataのみを使い、`resnet_baseline.py`のCLIと4列のOOF出力契約を検証します。外部データ・GPU・`.env`・W&B API keyは不要です。
+3 familyのsynthetic dataのみを使い、`gblup_baseline.py`・`resnet_baseline.py`のCLIと4列のOOF出力契約、run成果物6ファイルを検証します。外部データ・GPU・`.env`・W&B API keyは不要です。GBLUP側は、`WANDB_MODE=online`が設定された環境でも既定のままではW&Bを初期化しないことも確認します。
 
 ```bash
 docker compose build cpu-smoke
@@ -240,21 +315,69 @@ docker compose run --rm cpu-smoke
 `gblup`・`resnet`サービスは、実データを保有する利用者が手動で起動する経路です。`profiles: ["real-data"]`が付いており、CIでは実行しません。実行前に、[入力データ](#入力データ)節と同じ形式のSoyNAMデータを`./data`に配置してください。`data/`はいずれもread-onlyでmountし、結果ディレクトリのみ書き込み可能にしています。
 
 ```bash
-# GBLUP（現時点のCLIはdata/、16 family、gblup_results/を前提とするため、
-# 家系数が異なるデータでは完走しません）
+# GBLUP（--data-dir data --output-dir gblup_results --expected-families 16）
 docker compose --profile real-data run --rm gblup
 
 # ResNet
 docker compose --profile real-data run --rm resnet
 ```
 
-`gblup`サービスは`WANDB_MODE=offline`をCompose側で設定しているため、W&B API keyは不要です。実データが無い状態でこれらのサービスを実行した場合の挙動（`FileNotFoundError`等）はCIでの検証対象にしていません。
+`gblup`サービスはW&Bを既定の`disabled`で実行するため、W&B API keyも`WANDB_MODE`の設定も不要です。家系数が16以外のデータを使う場合や、W&Bのmodeを変える場合は、サービス定義の`command`を上書きします。
+
+```bash
+docker compose --profile real-data run --rm gblup \
+  python gblup_baseline.py \
+  --data-dir data \
+  --output-dir gblup_results \
+  --expected-families 8 \
+  --wandb-mode offline
+```
+
+実データが無い状態でこれらのサービスを実行した場合の挙動（`FileNotFoundError`等）はCIでの検証対象にしていません。
 
 ### legacy / experimental
 
 `preprocess`・`train`・`train-gpu`・`sweep-init`・`sweep-agent`・`gblup-baseline`・`dev`・`create-weights`・`create-graph-data`・`train-gnn`は`profiles: ["legacy"]`で分離されています。これらは検証済みベースライン経路ではなく、`--profile legacy`を明示しない限り起動しません。
 
+さらに、`preprocess.py`・`main.py`・`train_gnn.py`を起動するサービスは、サービス定義に`--allow-legacy`を含めていないため、profileを指定して起動しても終了コード2で停止します（[legacy / experimental経路](#legacy--experimental経路)）。意図的に実行する場合はコマンドを上書きします。
+
+```bash
+docker compose --profile legacy run --rm train \
+  python3 main.py --allow-legacy
+```
+
 実データはリポジトリにもDockerビルドコンテキストにも含めません（`.gitignore`・`.dockerignore`でそれぞれ除外済み）。`data/`はbind mountでのみコンテナへ渡します。
+
+## legacy / experimental経路
+
+`preprocess.py`・`main.py`・`train_gnn.py`は検証済みベースラインではありません。誤って本実験や精度比較に使わないよう、これらは`--allow-legacy`が無い限り、**入力の読み込み・ファイル生成・W&Bの初期化より前に**終了コード2で停止し、代替コマンドと既知の問題を表示します。
+
+```bash
+# 既定（何もせず終了し、検証済みコマンドと既知の問題を表示）
+uv run --frozen --extra gblup python main.py
+
+# legacy利用を承知したうえで実行する場合
+uv run --frozen --extra gblup python main.py --allow-legacy
+```
+
+- `--allow-legacy`はコマンドライン引数です。Docker Composeの`--profile legacy`指定や、W&B sweep agentの起動だけではこの確認を満たしません。Composeでlegacyを実行する場合は`docker compose --profile legacy run --rm train python3 main.py --allow-legacy`のようにコマンドを明示的に上書きし、sweepの場合は`sweep_config.yaml`の`command`へ自分で追記します。
+- legacy許可と外部ロギング許可は分離しています。`--allow-legacy`を付けてもW&Bは初期化されず、`--wandb-mode offline` / `online`を別途明示した場合だけ有効になります。
+- `main.py`は`family_id`列を必須にします。欠落時にrandom CVへ暗黙に切り替えることはせず、明確に失敗します。
+- 実行ログの冒頭・末尾と、`preprocess.py`が生成する`processed_data_hy/EXPERIMENTAL.txt`にexperimentalである旨を出力します。
+- legacyの出力は家系内で標準化した表現型に対する指標であり、検証済み経路のraw kg/haのOOF性能とは比較できません。W&B Sweepの探索目標はouter LOFOの集計値であるため、探索後の最高値も独立した汎化性能の証跡にはなりません。これらを検証済み性能として引用しないでください。
+
+### legacyを検証済み扱いへ移行するための条件
+
+継続利用する場合、次をすべて満たすまではexperimentalのままとします。
+
+1. 入力は共通ローダー（`soynam_data.py`）を経由し、family ID照合・founder除外・marker ID検証・未知記号の拒否を通ること。
+2. sample IDとmarker IDを処理の全段階で保持し、位置インデックスだけに依存しないこと。
+3. 欠損補完・分散/MAFフィルター・標準化・PCAをfold内のtrain partitionだけでfitすること。
+4. inner selection（epoch・ハイパーパラメータ選択）とouter testを分離し、選択後の最高値をouter性能として報告しないこと。
+5. 検証済み経路と同一のsplit（`outer_split_hash`が一致）と同一の尺度（raw kg/ha）で評価すること。
+6. `run_manifest.py`の既存manifest契約（metadata/split/preprocessing/metrics/predictions、`schema_version`、原子的な確定）に沿った成果物を出力すること。
+
+GNNについては、SNP→gene対応をfoldのmarker maskへIDベースで反映する必要があり、ローダーの差し替えだけでは条件を満たしません。
 
 ## OOF出力契約
 
@@ -274,24 +397,28 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 ```bash
 uv run --frozen --extra gblup \
   ruff format --check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
+  external_logging.py legacy_guard.py tests
 
 uv run --frozen --extra gblup \
   ruff check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py tests
+  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
+  external_logging.py legacy_guard.py tests
 
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
+GitHub Actionsでは、対象コードのformat/lint、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
-- GBLUPはdata directory、出力先、16 familyをCLIで変更できません（Docker Composeの`gblup`サービスも同じ制約を継承します）。
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
-- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。
-- `main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。
+- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。
+- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は対象GPU（RTX 5090）に合わせて選定済みで、CPU側で導入・テスト・sm_120対応まで確認していますが、**GPU実機での実行とイメージbuildは未実施**です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
+- GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
+- 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
+- `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
 - CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
 ## データ引用

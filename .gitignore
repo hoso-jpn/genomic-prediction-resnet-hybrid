@@ -26,3 +26,4 @@ logs/
 checkpoints/
 *.pt
 *.pth
+.coverage
