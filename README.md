@@ -11,6 +11,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 機能 | 状態 | 実装 |
 |---|---|---|
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
+| adzuki GSパネルloader | synthetic fixtureで検証（実パネル未検証） | `adzuki_gs_panel_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
 | 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
@@ -103,6 +104,33 @@ loaderは読み込み時に次を検証します。
 - phenotype値の欠損・空文字は、sample ID照合が成功した後に判定します。該当するsampleは学習対象から除外されますが、それ以外の値は数値へ変換できない場合エラーになります。欠損個体を除外した結果、familyのRIL sampleが0件になった場合もエラーになります。
 
 出力される配列のsample順序は、phenotypeファイル内の出現順を維持します。
+
+## adzuki GSパネルの読み込み
+
+[`hoso-jpn/adzuki-snp-pipeline`](https://github.com/hoso-jpn/adzuki-snp-pipeline)が出力するGenomic Selection (GS) パネルを読み込むローダーです（`adzuki_gs_panel_data.py`）。データ契約は producer 側の[`docs/gs_panel_data_contract.md`](https://github.com/hoso-jpn/adzuki-snp-pipeline/blob/main/docs/gs_panel_data_contract.md)で確定しています。
+
+```python
+from adzuki_gs_panel_data import load_gs_panel
+
+panel = load_gs_panel("path/to/gs_panel")       # cohortが1つならcohort_idは省略可
+panel.genotypes                                  # sample行 × variant列（float64、欠損はNaN）
+panel.sample_ids, panel.variant_keys             # メタデータは配列として分離
+panel.sample_metadata, panel.variant_metadata    # producerのTSVをそのまま保持
+```
+
+読み込む4ファイル（`<cohort_id>.gs_panel.genotype_matrix.tsv.gz`・`sample_metadata.tsv`・`variant_metadata.tsv`・`manifest.json`）のうち、genotype matrixはファイル上がvariant行 × sample列で、`soynam_data.py`の`_load_genotype_frame`と同じく読み込み後に転置します。dosageは`0/0`→-1、ヘテロ→0、`1/1`→+1、欠損→`nan`で、既存の`GENOTYPE_ENCODING`と同一のadditive scaleです。
+
+次の場合は明示的に失敗します（暗黙の補正・整列はしません）。
+
+- `manifest.json`の`schema_version`、`genotype_encoding.schema`、`matrix_orientation`、`missing_token`、`ploidy`、dosage対応表が想定と異なる（manifestはv1/v2に対応し、encodingは共通のdiploid限定v1。`parameters.sample_ploidy`も2であることを検証）
+- manifestが記録するchecksumと実ファイルが一致しない（`verify_file_checksums=False`で明示的に無効化可能）
+- dosageが`-1` / `0` / `1` / `nan`以外、行のセル数がsample数と不一致、sample ID・variant keyの重複
+- sample/variant metadataの行順・件数・`*_index`列がmatrixと不一致
+- sample列が0件（variantが0件の「空パネル」はproducer側の正常な結果として受け入れ、sample一覧を保持します）
+
+このローダーは**GSモデルの学習・評価を含みません**（Issue #10のスコープはローダーのみ）。表現型は含まれないため、必要な場合は`sample_ids`で結合してください。metadataは全列を文字列として保持し、`001`・`NA`などのIDを変換しません。数値列を使う場合は利用側で明示的に変換してください。
+
+producerの実コード（`3158ca5`）から生成したsyntheticパネル（空/非空、phased/missing、manifest v2）で結合確認済みです。再生成手順と範囲は[fixtureの説明](tests/fixtures/gs_panel_producer_v2/README.md)を参照してください。**実コホート・大規模パネルは未検証**です。全行をメモリに展開するため、大規模な全ゲノムmatrixの読み込みには相応のRAMが必要です。
 
 ## 実行方法
 
@@ -400,12 +428,12 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 uv run --frozen --extra gblup \
   ruff format --check \
   gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py losses.py gene_graph.py tests
+  adzuki_gs_panel_data.py external_logging.py legacy_guard.py losses.py gene_graph.py tests
 
 uv run --frozen --extra gblup \
   ruff check \
   gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py losses.py gene_graph.py tests
+  adzuki_gs_panel_data.py external_logging.py legacy_guard.py losses.py gene_graph.py tests
 
 uv run --frozen --extra gblup pytest -q
 ```
@@ -421,6 +449,7 @@ GitHub Actionsでは、対象コードのformat/lint、単体テストスイー�
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
+- `adzuki_gs_panel_data.py`はproducer実コード由来のsyntheticパネルで結合確認済みですが、実コホート・大規模パネルと、GSモデルの学習・評価は未検証です。
 - CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
 ## データ引用

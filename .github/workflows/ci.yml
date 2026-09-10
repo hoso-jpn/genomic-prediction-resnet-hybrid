@@ -43,6 +43,7 @@ jobs:
           resnet_baseline.py
           soynam_data.py
           run_manifest.py
+          adzuki_gs_panel_data.py
           external_logging.py
           legacy_guard.py
           losses.py
@@ -57,6 +58,7 @@ jobs:
           resnet_baseline.py
           soynam_data.py
           run_manifest.py
+          adzuki_gs_panel_data.py
           external_logging.py
           legacy_guard.py
           losses.py
