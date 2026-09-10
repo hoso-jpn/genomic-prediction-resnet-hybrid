@@ -243,15 +243,29 @@ def audit_run(run_dir, name, seed, config, data, checksums, provenance):
         or metadata["seed"] != seed
     ):
         raise ValueError(f"{name}: input, split, model, or seed mismatch")
-    for filename, digest in metadata["source_file_checksums"].items():
-        if (
-            filename not in config["source_file_checksums"]
-            or digest != config["source_file_checksums"][filename]
-        ):
-            raise ValueError(f"{name}: source checksum mismatch")
-    for package, version in metadata["library_versions"].items():
-        if version != config["library_versions"][package]:
-            raise ValueError(f"{name}: environment mismatch")
+    required_sources = {
+        f"{model}_baseline.py",
+        "soynam_data.py",
+        "input_qc.py",
+        "evaluation_split.py",
+        "run_measurements.py",
+        "run_manifest.py",
+        "external_logging.py" if model == "gblup" else "model.py",
+    }
+    expected_sources = {
+        filename: config["source_file_checksums"][filename]
+        for filename in required_sources
+    }
+    if metadata["source_file_checksums"] != expected_sources:
+        raise ValueError(f"{name}: source checksum mismatch or missing source")
+    required_packages = {"numpy", "pandas", "scikit-learn"} | (
+        {"scipy"} if model == "gblup" else {"torch", "torch-geometric"}
+    )
+    expected_versions = {
+        package: config["library_versions"][package] for package in required_packages
+    }
+    if metadata["library_versions"] != expected_versions:
+        raise ValueError(f"{name}: environment mismatch or missing library")
     if metadata["python_version"] != config["python_version"]:
         raise ValueError(f"{name}: Python version mismatch")
     hyper = metadata["hyperparameters"]
@@ -262,14 +276,12 @@ def audit_run(run_dir, name, seed, config, data, checksums, provenance):
         != config["max_sample_missing_rate"]
     ):
         raise ValueError(f"{name}: sample threshold mismatch")
-    if seed is not None and (
-        metadata["device_resolved"] != config["device"]
-        or any(
-            hyper[key] != config[key]
-            for key in ("max_epochs", "patience", "batch_size", "pca_components")
-        )
-    ):
-        raise ValueError(f"{name}: device or training budget mismatch")
+    if seed is not None:
+        expected_hyper = {
+            key: values[0] for key, values in config["resnet_search_space"].items()
+        }
+        if metadata["device_resolved"] != config["device"] or hyper != expected_hyper:
+            raise ValueError(f"{name}: device or hyperparameter mismatch")
     frame = pd.read_csv(
         bundle / "predictions.csv",
         dtype={"family_id": str, "sample_name": str},

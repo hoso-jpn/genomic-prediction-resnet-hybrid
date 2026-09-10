@@ -88,6 +88,20 @@ def test_comparison_runs_both_clis_and_rejects_corrupted_oof(tmp_path):
     metadata = json.loads((bundle / "metadata.json").read_text())
     assert metadata["split_plan"]["plan_hash"] == config["split_plan_hash"]
     assert str(tmp_path) not in json.dumps(metadata["command"])
+    metadata_path = bundle / "metadata.json"
+    for field, value, message in [
+        ("source_file_checksums", {}, "source checksum"),
+        ("library_versions", {}, "environment mismatch"),
+        (
+            "hyperparameters",
+            {**metadata["hyperparameters"], "learning_rate": 0.5},
+            "hyperparameter mismatch",
+        ),
+    ]:
+        metadata_path.write_text(json.dumps({**metadata, field: value}))
+        with pytest.raises(ValueError, match=message):
+            comparison.report_experiment(args.experiment_dir, args.data_dir)
+    metadata_path.write_text(json.dumps(metadata))
     predictions = bundle / "predictions.csv"
     predictions.write_text(predictions.read_text().replace("F01_RIL_000", "unknown", 1))
     with pytest.raises(ValueError, match="OOF identity"):
