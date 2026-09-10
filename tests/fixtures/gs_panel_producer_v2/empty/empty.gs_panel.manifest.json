@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "run_id": "synthetic-empty",
+  "generated_at": "2026-09-10T00:00:00Z",
+  "cohort_id": "empty",
+  "pipeline_version": "synthetic-fixture",
+  "git_commit": "3158ca50c2c13c31bdc80db302c7df4bbb5670bf",
+  "containers": {
+    "gs_normalize_variants": "fixture/unused:synthetic",
+    "classify_normalized_variants": "fixture/unused:synthetic",
+    "gs_index_classified_variants": "fixture/unused:synthetic",
+    "gatk_variantfiltration_gs": "fixture/unused:synthetic",
+    "gatk_selectpassvariants_gs": "fixture/unused:synthetic",
+    "build_gs_panel": "fixture/unused:synthetic",
+    "reconcile_gs_panel_accounting": "fixture/unused:synthetic",
+    "build_gs_panel_manifest": "fixture/unused:synthetic"
+  },
+  "parameters": {
+    "sample_ploidy": 2
+  },
+  "genotype_encoding": {
+    "schema": "diploid_additive_dosage_v1",
+    "dosage_by_genotype": {
+      "0/0": -1,
+      "0/1_or_1/0": 0,
+      "1/1": 1
+    },
+    "phasing": "ignored for dosage; 0|1 encodes identically to 0/1",
+    "missing_token": "nan",
+    "matrix_orientation": "variant_rows_by_sample_columns",
+    "ploidy": "diploid_only"
+  },
+  "panel_status": "empty",
+  "checksums": {
+    "empty.gs_panel.genotype_matrix.tsv.gz": "sha256:32dbda4a6022846ab9f08991366133a8471f09932ba7848f7e0ece26b57e9b46",
+    "empty.gs_panel.sample_metadata.tsv": "sha256:2f9b4e5e46377faa8b26be948f3b887f5b04ddf6fad7d80b0262e888874bf99d",
+    "empty.gs_panel.variant_metadata.tsv": "sha256:da114015463403dfc843b47b5a1a4fc112417d779850bf59e7ebe284b9043fc3"
+  },
+  "manifest_hash": "sha256:54e64ccffa70fb9650eb991b94aaa6bfba46366278385edf35bea39c287c110e"
+}

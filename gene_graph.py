@@ -24,7 +24,9 @@ Node ID rules (both directions of the contract):
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
+from numbers import Integral
 
 import pandas as pd
 import torch
@@ -42,6 +44,10 @@ def to_bidirectional_edges(pairs: Iterable[tuple[int, int]]) -> list[tuple[int, 
     """
     undirected: set[tuple[int, int]] = set()
     for pair in pairs:
+        if len(pair) != 2 or any(
+            isinstance(node, bool) or not isinstance(node, Integral) for node in pair
+        ):
+            raise ValueError("edge pairs must contain two integer gene IDs")
         source, target = (int(pair[0]), int(pair[1]))
         if source < 0 or target < 0:
             raise ValueError(f"gene IDs must be non-negative: {(source, target)}")
@@ -92,7 +98,7 @@ def _validate_edge_frame(frame: pd.DataFrame, num_genes: int) -> list[tuple[int,
     if self_loops:
         raise ValueError(f"self-loops are not allowed; gene IDs: {self_loops}")
 
-    duplicates = sorted({edge for edge in edges if edges.count(edge) > 1})
+    duplicates = sorted(edge for edge, count in Counter(edges).items() if count > 1)
     if duplicates:
         raise ValueError(
             "each direction must appear exactly once; duplicated edges: "

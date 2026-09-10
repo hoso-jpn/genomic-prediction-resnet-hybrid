@@ -43,6 +43,12 @@ def load_data():
     family_ids = y_df["family_id"].values
     snp_map_df = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, "snp_to_gene_map.csv"))
     adj_df = pd.read_csv(os.path.join(PROCESSED_DATA_PATH, "gene_adj.csv"))
+    # Validate the CSV dtype before conversion; dtype=torch.long would silently
+    # truncate fractional IDs and make the tensor validator accept bad input.
+    if "gene_id" not in snp_map_df or not pd.api.types.is_integer_dtype(
+        snp_map_df["gene_id"]
+    ):
+        raise ValueError("snp_to_gene_map must contain integer gene IDs")
     snp_to_gene_map = torch.tensor(snp_map_df["gene_id"].values, dtype=torch.long)
 
     # 遺伝子数はマッピングから導出し、エッジ側をその範囲で検証する。

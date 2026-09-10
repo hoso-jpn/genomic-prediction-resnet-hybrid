@@ -4,8 +4,11 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 import gene_graph
@@ -13,6 +16,33 @@ from create_dummy_graph_data import build_dummy_graph
 from losses import CorrelationLoss
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize("node", [0.5, True, "1", float("nan")])
+def test_normalization_rejects_non_integer_ids(node):
+    with pytest.raises(ValueError, match="integer gene IDs"):
+        gene_graph.to_bidirectional_edges([(node, 2)])
+
+
+@pytest.mark.parametrize("gene_ids", [[0.5, 1.0], [True, False], ["bad", "1"]])
+def test_csv_loader_rejects_invalid_gene_ids(tmp_path, gene_ids):
+    import train_gnn
+
+    pd.DataFrame({"Yld (kg/ha)": [1.0], "family_id": ["F1"]}).to_csv(
+        tmp_path / "y_phenotype_hy.csv"
+    )
+    np.save(tmp_path / "X_genotype_int8.npy", np.zeros((1, 2)))
+    pd.DataFrame({"snp_id": [0, 1], "gene_id": gene_ids}).to_csv(
+        tmp_path / "snp_to_gene_map.csv", index=False
+    )
+    gene_graph.edge_frame([(0, 1), (1, 0)]).to_csv(
+        tmp_path / "gene_adj.csv", index=False
+    )
+    with (
+        mock.patch.object(train_gnn, "PROCESSED_DATA_PATH", str(tmp_path)),
+        pytest.raises(ValueError, match="integer gene IDs"),
+    ):
+        train_gnn.load_data()
 
 
 class EdgeContractTest(unittest.TestCase):

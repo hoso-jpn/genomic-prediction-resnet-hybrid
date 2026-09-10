@@ -11,6 +11,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 機能 | 状態 | 実装 |
 |---|---|---|
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
+| adzuki GSパネルloader | synthetic fixtureで検証（実パネル未検証） | `adzuki_gs_panel_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
 | 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
@@ -103,6 +104,33 @@ loaderは読み込み時に次を検証します。
 - phenotype値の欠損・空文字は、sample ID照合が成功した後に判定します。該当するsampleは学習対象から除外されますが、それ以外の値は数値へ変換できない場合エラーになります。欠損個体を除外した結果、familyのRIL sampleが0件になった場合もエラーになります。
 
 出力される配列のsample順序は、phenotypeファイル内の出現順を維持します。
+
+## adzuki GSパネルの読み込み
+
+[`hoso-jpn/adzuki-snp-pipeline`](https://github.com/hoso-jpn/adzuki-snp-pipeline)が出力するGenomic Selection (GS) パネルを読み込むローダーです（`adzuki_gs_panel_data.py`）。データ契約は producer 側の[`docs/gs_panel_data_contract.md`](https://github.com/hoso-jpn/adzuki-snp-pipeline/blob/main/docs/gs_panel_data_contract.md)で確定しています。
+
+```python
+from adzuki_gs_panel_data import load_gs_panel
+
+panel = load_gs_panel("path/to/gs_panel")  # cohortが1つならcohort_idは省略可
+panel.genotypes  # sample行 × variant列（float64、欠損はNaN）
+panel.sample_ids, panel.variant_keys  # メタデータは配列として分離
+panel.sample_metadata, panel.variant_metadata  # producerのTSVをそのまま保持
+```
+
+読み込む4ファイル（`<cohort_id>.gs_panel.genotype_matrix.tsv.gz`・`sample_metadata.tsv`・`variant_metadata.tsv`・`manifest.json`）のうち、genotype matrixはファイル上がvariant行 × sample列で、`soynam_data.py`の`_load_genotype_frame`と同じく読み込み後に転置します。dosageは`0/0`→-1、ヘテロ→0、`1/1`→+1、欠損→`nan`で、既存の`GENOTYPE_ENCODING`と同一のadditive scaleです。
+
+次の場合は明示的に失敗します（暗黙の補正・整列はしません）。
+
+- `manifest.json`の`schema_version`、`genotype_encoding.schema`、`matrix_orientation`、`missing_token`、`ploidy`、dosage対応表が想定と異なる（manifestはv1/v2に対応し、encodingは共通のdiploid限定v1。`parameters.sample_ploidy`も2であることを検証）
+- manifestが記録するchecksumと実ファイルが一致しない（`verify_file_checksums=False`で明示的に無効化可能）
+- dosageが`-1` / `0` / `1` / `nan`以外、行のセル数がsample数と不一致、sample ID・variant keyの重複
+- sample/variant metadataの行順・件数・`*_index`列がmatrixと不一致
+- sample列が0件（variantが0件の「空パネル」はproducer側の正常な結果として受け入れ、sample一覧を保持します）
+
+このローダーは**GSモデルの学習・評価を含みません**（Issue #10のスコープはローダーのみ）。表現型は含まれないため、必要な場合は`sample_ids`で結合してください。metadataは全列を文字列として保持し、`001`・`NA`などのIDを変換しません。数値列を使う場合は利用側で明示的に変換してください。
+
+producerの実コード（`3158ca5`）から生成したsyntheticパネル（空/非空、phased/missing、manifest v2）で結合確認済みです。再生成手順と範囲は[fixtureの説明](tests/fixtures/gs_panel_producer_v2/README.md)を参照してください。**実コホート・大規模パネルは未検証**です。全行をメモリに展開するため、大規模な全ゲノムmatrixの読み込みには相応のRAMが必要です。
 
 ## 実行方法
 
@@ -259,6 +287,20 @@ gblup_results/
 
 `metadata.json`の`git_commit`はベストエフォートです。Dockerイメージは`.dockerignore`で`.git/`をビルドコンテキストから除外しているため、コンテナ内で実行した場合は取得できず`null`になります。明示的に記録したい場合は、実行前に環境変数`GIT_COMMIT_SHA`を設定してください（`git`コマンドより優先されます）。
 
+### 生成物とGit管理
+
+再現性の証跡は`<output-dir>/artifacts/<run_id>/`のrun artifactsが担います。次の生成物はGitで追跡しません（`.gitignore`で除外）。
+
+| 生成物 | 生成方法 |
+|---|---|
+| `wandb/`（W&Bのローカルrun directory） | `--wandb-mode offline` / `online`での実行時に生成 |
+| `pretrained_models/*.pt`（ダミーCNN重み） | `python create_dummy_pretrained_weights.py`（既定 seed=42） |
+| `gblup_results/`・`resnet_results/`・`logs/`・`processed_data_hy/` | 各スクリプトの実行時に生成 |
+
+`.gitignore`は既に追跡されているファイルには遡及しないため、過去に追跡されていた`wandb/`配下のログと`pretrained_models/dummy_cnn_weights.pt`は、Issue #15で明示的に追跡を停止しました（ローカルファイルは削除していません）。対象一覧、秘密情報の確認方法と結果（値は非掲載）、再生成手順は[docs/generated-artifacts.md](docs/generated-artifacts.md)にまとめています。
+
+ダミー重みはランダム初期化した重みであり、事前学習済みモデルの性能証跡ではありません。検証済みベースライン（`gblup_baseline.py` / `resnet_baseline.py`）の実行には不要です。
+
 ### 未対応（Issue #6予定）
 
 `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）やCLIオプションは、本Issue #5では追加していません。Issue #6（GPU本実験・GBLUP/ResNet比較）で対応予定です。
@@ -402,6 +444,7 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
 - Ruffの設定は`pyproject.toml`の`[tool.ruff]`に明示しています（`target-version = "py311"`、`line-length = 88`、採用ルールを`select`で列挙）。行長ルール`E501`とzipの`strict`指定（`B905`）は採用していません。前者はformatterのline-lengthで担保し、後者は実行時挙動が変わるため機械的整形とは分けて扱います。
+- `adzuki_gs_panel_data.py`はproducer実コード由来のsyntheticパネルで結合確認済みですが、実コホート・大規模パネルと、GSモデルの学習・評価は未検証です。
 
 ## データ引用
 
