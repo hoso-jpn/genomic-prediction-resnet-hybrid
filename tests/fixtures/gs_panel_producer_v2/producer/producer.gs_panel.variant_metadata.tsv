@@ -1,0 +1,3 @@
+cohort_id	variant_index	variant_key	chrom	pos	ref	alt	qual	missing_genotype_count	missing_genotype_rate
+producer	0	Chr1:100:A:T	Chr1	100	A	T	100	0	0.000000
+producer	1	Chr1:200:G:C	Chr1	200	G	C	100	1	0.333333

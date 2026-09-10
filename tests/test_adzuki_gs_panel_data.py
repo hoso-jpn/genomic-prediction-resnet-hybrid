@@ -14,6 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import pytest
 
 import adzuki_gs_panel_data as gs_panel
 from soynam_data import GENOTYPE_ENCODING
@@ -238,7 +239,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_unsupported_schema_version_fails(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version"):
-            self._load_with({"schema_version": 2})
+            self._load_with({"schema_version": 3})
 
     def test_unsupported_encoding_schema_fails(self) -> None:
         with self.assertRaisesRegex(ValueError, "encoding schema"):
@@ -338,6 +339,61 @@ class IntegrityTest(unittest.TestCase):
         _write_panel(self.panel_dir, sample_metadata_rows=rows)
         with self.assertRaisesRegex(ValueError, "sample_index"):
             gs_panel.load_gs_panel(self.panel_dir)
+
+
+@pytest.mark.parametrize("samples", [["001", "002", "003"], ["NA", "null", "nan"]])
+def test_metadata_preserves_opaque_ids(tmp_path, samples):
+    _write_panel(tmp_path, samples=samples)
+    panel = gs_panel.load_gs_panel(tmp_path)
+    assert list(panel.sample_ids) == samples
+    assert panel.sample_metadata["sample_id"].tolist() == samples
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1", None])
+def test_manifest_schema_requires_an_integer(tmp_path, version):
+    _write_panel(tmp_path, manifest_overrides={"schema_version": version})
+    with pytest.raises(ValueError, match="schema_version"):
+        gs_panel.load_gs_panel(tmp_path)
+
+
+@pytest.mark.parametrize("ploidy", [1, 4, True, "2", None])
+def test_manifest_rejects_contradictory_ploidy(tmp_path, ploidy):
+    _write_panel(tmp_path, manifest_overrides={"parameters": {"sample_ploidy": ploidy}})
+    with pytest.raises(ValueError, match="sample_ploidy"):
+        gs_panel.load_gs_panel(tmp_path)
+
+
+def test_fractional_metadata_index_is_not_truncated(tmp_path):
+    rows = [
+        {"sample_id": sample, "sample_index": i + 0.5}
+        for i, sample in enumerate(SAMPLES)
+    ]
+    _write_panel(tmp_path, sample_metadata_rows=rows)
+    with pytest.raises(ValueError, match="0-indexed"):
+        gs_panel.load_gs_panel(tmp_path)
+
+
+def test_empty_sample_id_is_rejected(tmp_path):
+    _write_panel(tmp_path, samples=["S1", "", "S3"])
+    with pytest.raises(ValueError, match="empty sample IDs"):
+        gs_panel.load_gs_panel(tmp_path)
+
+
+@pytest.mark.parametrize("cohort", ["producer", "empty"])
+def test_real_producer_synthetic_output(cohort):
+    panel = gs_panel.load_gs_panel(
+        Path(__file__).parent / "fixtures" / "gs_panel_producer_v2" / cohort
+    )
+    assert panel.manifest["schema_version"] == 2
+    assert list(panel.sample_ids) == ["001", "NA", "sample3"]
+    assert len(panel.manifest["containers"]) == 8
+    if cohort == "empty":
+        assert panel.genotypes.shape == (3, 0)
+        assert panel.is_empty
+    else:
+        np.testing.assert_equal(
+            panel.genotypes, np.array([[-1, np.nan], [0, 1], [1, -1]])
+        )
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ MATRIX_SUFFIX = ".gs_panel.genotype_matrix.tsv.gz"
 SAMPLE_METADATA_SUFFIX = ".gs_panel.sample_metadata.tsv"
 VARIANT_METADATA_SUFFIX = ".gs_panel.variant_metadata.tsv"
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 SUPPORTED_ENCODING_SCHEMA = "diploid_additive_dosage_v1"
 EXPECTED_ORIENTATION = "variant_rows_by_sample_columns"
 EXPECTED_MISSING_TOKEN = "nan"
@@ -119,11 +119,21 @@ def validate_manifest(manifest: dict[str, Any], *, cohort_id: str) -> None:
     the file on disk is not the schema this loader parses, so it is an
     error rather than a warning.
     """
+    _require(isinstance(manifest, dict), "GS panel manifest must be a JSON object")
     schema_version = manifest.get("schema_version")
     _require(
-        schema_version == SUPPORTED_SCHEMA_VERSION,
+        type(schema_version) is int and schema_version in SUPPORTED_SCHEMA_VERSIONS,
         f"unsupported GS panel schema_version: {schema_version!r} "
-        f"(expected {SUPPORTED_SCHEMA_VERSION})",
+        f"(expected one of {SUPPORTED_SCHEMA_VERSIONS})",
+    )
+    # v2 changes container provenance keys; the dosage/matrix contract is v1
+    # in both manifest versions. Preserve containers without reinterpreting it.
+    parameters = manifest.get("parameters")
+    _require(
+        isinstance(parameters, dict)
+        and type(parameters.get("sample_ploidy")) is int
+        and parameters["sample_ploidy"] == 2,
+        "manifest parameters.sample_ploidy must be 2",
     )
     manifest_cohort = manifest.get("cohort_id")
     _require(
@@ -162,7 +172,8 @@ def validate_manifest(manifest: dict[str, Any], *, cohort_id: str) -> None:
     dosages = encoding.get("dosage_by_genotype")
     _require(
         isinstance(dosages, dict)
-        and {key: float(value) for key, value in dosages.items()} == EXPECTED_DOSAGES,
+        and all(type(value) in (int, float) for value in dosages.values())
+        and dosages == EXPECTED_DOSAGES,
         f"unexpected dosage table: {dosages!r} (expected {EXPECTED_DOSAGES})",
     )
 
@@ -205,8 +216,8 @@ def verify_checksums(
 
 def _read_matrix(path: Path) -> tuple[list[str], list[str], FloatArray]:
     """Read the variant-rows-by-sample-columns matrix as written on disk."""
-    with gzip.open(path, mode="rt", newline="") as handle:
-        header = handle.readline().rstrip("\n").split("\t")
+    with gzip.open(path, mode="rt", encoding="utf-8", newline="") as handle:
+        header = handle.readline().rstrip("\r\n").split("\t")
         if not header or header[0] != VARIANT_KEY_COLUMN:
             raise ValueError(
                 f"matrix header must start with '{VARIANT_KEY_COLUMN}', "
@@ -223,7 +234,7 @@ def _read_matrix(path: Path) -> tuple[list[str], list[str], FloatArray]:
         for line_number, line in enumerate(handle, start=2):
             if not line.strip():
                 continue
-            fields = line.rstrip("\n").split("\t")
+            fields = line.rstrip("\r\n").split("\t")
             if len(fields) != len(sample_ids) + 1:
                 raise ValueError(
                     f"matrix line {line_number} has {len(fields) - 1} dosage "
@@ -267,6 +278,8 @@ def _parse_dosage(token: str, *, variant_key: str, sample_id: str) -> float:
 
 
 def _check_duplicates(values: list[str], *, kind: str) -> None:
+    if any(not value.strip() for value in values):
+        raise ValueError(f"empty {kind} in the GS panel")
     counts = Counter(values)
     duplicates = sorted(value for value, count in counts.items() if count > 1)
     if duplicates:
@@ -291,7 +304,7 @@ def load_gs_panel(
     resolved_cohort = _resolve_cohort_id(panel_dir, cohort_id)
 
     manifest_path = panel_dir / f"{resolved_cohort}{MANIFEST_SUFFIX}"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     validate_manifest(manifest, cohort_id=resolved_cohort)
 
     matrix_name = f"{resolved_cohort}{MATRIX_SUFFIX}"
@@ -312,8 +325,14 @@ def load_gs_panel(
     _check_duplicates(sample_ids, kind="sample IDs")
     _check_duplicates(variant_keys, kind="variant keys")
 
-    sample_metadata = pd.read_table(panel_dir / sample_metadata_name)
-    variant_metadata = pd.read_table(panel_dir / variant_metadata_name)
+    # IDs are opaque strings: pandas inference corrupts '001' and NA-like IDs.
+    # Preserve all metadata text; numeric consumers can convert selected fields.
+    sample_metadata = pd.read_table(
+        panel_dir / sample_metadata_name, dtype=str, keep_default_na=False
+    )
+    variant_metadata = pd.read_table(
+        panel_dir / variant_metadata_name, dtype=str, keep_default_na=False
+    )
     _check_metadata_alignment(
         sample_metadata,
         expected=sample_ids,
@@ -369,8 +388,8 @@ def _check_metadata_alignment(
             f"{len(actual)} row(s) vs {len(expected)} in the matrix, "
             "or a different order"
         )
-    positions = [int(value) for value in frame[index_column].tolist()]
-    if positions != list(range(len(expected))):
+    positions = frame[index_column].tolist()
+    if positions != [str(index) for index in range(len(expected))]:
         raise ValueError(
             f"{kind} metadata '{index_column}' must be 0-indexed positions "
             "matching the matrix order"

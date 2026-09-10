@@ -4,6 +4,22 @@ import glob
 import os
 import gc
 
+import legacy_guard
+
+DESCRIPTION = "legacy SoyNAM preprocessing (experimental, not a verified baseline)"
+EXPERIMENTAL_NOTICE = """このディレクトリは legacy preprocess.py の出力です（experimental）。
+
+- 表現型は family 内で標準化済みで、kg/ha ではありません。検証済み経路
+  （gblup_baseline.py / resnet_baseline.py）の raw kg/ha 評価と同一視できません。
+- phenotype/genotype はファイル名のsorted順で対応付けており、family ID照合・
+  founder除外・marker ID検証は行っていません。
+- 未知アレル・欠損は fillna(0) で埋めており、低分散・MAFフィルターは
+  fold内ではなく全個体で適用しています。
+
+この出力および main.py / train_gnn.py の結果は、検証済みOOF性能の証跡として
+扱わないでください。
+"""
+
 def preprocess_to_numpy():
     data_dir = './data'
     pheno_files = sorted(glob.glob(os.path.join(data_dir, '*_phenotype_data.tsv.gz')))
@@ -83,6 +99,10 @@ def preprocess_to_numpy():
     os.makedirs(output_dir, exist_ok=True)
     final_y.to_csv(f'{output_dir}/y_phenotype_hy.csv')
     np.save(f'{output_dir}/X_genotype_int8.npy', final_X_array)
+    # 出力自体にもexperimentalであることを残す（この成果物を検証済み証跡として
+    # 引用させないため）
+    with open(f'{output_dir}/EXPERIMENTAL.txt', 'w', encoding='utf-8') as handle:
+        handle.write(EXPERIMENTAL_NOTICE)
 
     print(f"\n✨ 前処理完了！")
     print(f"合計個体数: {final_X_array.shape[0]} | 残ったSNP数: {final_X_array.shape[1]}")
@@ -95,4 +115,6 @@ def preprocess_to_numpy():
     #     train個体のみから学習する（compute_fold_pcs）。ここでは全個体PCAを保存しない。
 
 if __name__ == "__main__":
+    # 明示的な --allow-legacy が無い限り、入力読み込みも出力生成も行わない。
+    legacy_guard.require_opt_in("preprocess.py", DESCRIPTION)
     preprocess_to_numpy()

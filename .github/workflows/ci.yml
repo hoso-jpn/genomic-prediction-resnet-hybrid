@@ -44,6 +44,8 @@ jobs:
           soynam_data.py
           run_manifest.py
           adzuki_gs_panel_data.py
+          external_logging.py
+          legacy_guard.py
           tests
 
       - name: Run Ruff
@@ -55,6 +57,8 @@ jobs:
           soynam_data.py
           run_manifest.py
           adzuki_gs_panel_data.py
+          external_logging.py
+          legacy_guard.py
           tests
 
       - name: Run unit tests
