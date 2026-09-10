@@ -21,9 +21,11 @@ from sklearn.model_selection import LeaveOneGroupOut
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import evaluation_split
 import input_qc
 import model
 import run_manifest
+import run_measurements
 import soynam_data
 from model import GatedGenomicResNet
 from soynam_data import SoynamDataset, list_family_files, load_soynam_dataset
@@ -368,13 +370,17 @@ def run_lofo(
     dataset: SoynamDataset,
     config: ResNetConfig,
     device: torch.device,
+    *,
+    fixed_splits=None,
 ) -> tuple[FloatArray, list[ResnetFoldRecord]]:
     """Generate one prediction for every sample using outer family-wise CV."""
     predictions = np.full(dataset.phenotypes.size, np.nan, dtype=np.float64)
     fold_records: list[ResnetFoldRecord] = []
     splitter = LeaveOneGroupOut()
     for fold_index, (train_indices, test_indices) in enumerate(
-        splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
+        fixed_splits
+        if fixed_splits is not None
+        else splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
     ):
         fold_predictions, fold_record = predict_resnet_fold(
             dataset.genotypes,
@@ -612,6 +618,8 @@ def save_run_artifacts(
     input_files: list[dict[str, str]],
     source_checksums: dict[str, str],
     qc: input_qc.InputQc | None = None,
+    split_plan: dict[str, Any] | None = None,
+    measurements: dict[str, Any] | None = None,
 ) -> Path:
     """Assemble this run's metadata/split/preprocessing/metrics and write them.
 
@@ -691,6 +699,8 @@ def save_run_artifacts(
         **_device_environment_info(device_requested, device),
         "input_files": input_files,
         "input_qc": qc.report if qc is not None else None,
+        "split_plan": split_plan,
+        "measurements": measurements,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -715,6 +725,7 @@ def save_run_artifacts(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--split-file", type=Path)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("resnet_results"))
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -737,6 +748,7 @@ def main() -> None:
     if device_name == "auto":
         device_name = "cpu"
     device = torch.device(device_name)
+    measurement = run_measurements.RunMeasurement(torch, device)
     config = ResNetConfig(
         seed=args.seed,
         max_epochs=args.max_epochs,
@@ -756,6 +768,8 @@ def main() -> None:
             Path(model.__file__),
             Path(soynam_data.__file__),
             Path(input_qc.__file__),
+            Path(evaluation_split.__file__),
+            Path(run_measurements.__file__),
             Path(run_manifest.__file__),
         ]
     )
@@ -765,9 +779,17 @@ def main() -> None:
         args.max_sample_missing_rate,
     )
     dataset = qc.dataset
-    predictions, fold_records = run_lofo(dataset, config, device)
+    fixed_splits, split_plan = (None, None)
+    if args.split_file is not None:
+        fixed_splits, split_plan = evaluation_split.load_plan(
+            args.split_file, dataset, input_files, args.max_sample_missing_rate
+        )
+    predictions, fold_records = run_lofo(
+        dataset, config, device, fixed_splits=fixed_splits
+    )
     predictions_frame = make_oof_frame(dataset, predictions)
     run_manifest.verify_input_files_unchanged(family_files, input_files)
+    evaluation_split.verify_unchanged(args.split_file, split_plan)
     run_dir = save_run_artifacts(
         output_dir=args.output_dir,
         dataset=dataset,
@@ -780,6 +802,8 @@ def main() -> None:
         input_files=input_files,
         source_checksums=source_checksums,
         qc=qc,
+        split_plan=split_plan,
+        measurements=measurement.finish(),
     )
     print(f"run artifacts: {run_dir}")
 

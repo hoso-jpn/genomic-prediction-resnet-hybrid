@@ -21,9 +21,11 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
+import evaluation_split
 import external_logging
 import input_qc
 import run_manifest
+import run_measurements
 import soynam_data
 from external_logging import DEFAULT_WANDB_MODE, NullRunLogger, WandbRunLogger
 from soynam_data import list_family_files, load_soynam_dataset
@@ -394,6 +396,8 @@ def save_run_artifacts(
     command_arguments: Sequence[str] | None = None,
     min_observed_rate: float = MIN_OBSERVED_RATE,
     qc: input_qc.InputQc | None = None,
+    split_plan: dict[str, Any] | None = None,
+    measurements: dict[str, Any] | None = None,
 ) -> Path:
     """Assemble this run's metadata/split/preprocessing/metrics and write them.
 
@@ -463,6 +467,8 @@ def save_run_artifacts(
         "external_logging": {"backend": "wandb", "mode": wandb_mode},
         "input_files": input_files,
         "input_qc": qc.report if qc is not None else None,
+        "split_plan": split_plan,
+        "measurements": measurements,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -512,6 +518,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     it is requested explicitly.
     """
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--split-file", type=Path)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
@@ -545,6 +552,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     command_arguments = list(sys.argv[1:] if argv is None else argv)
 
+    measurement = run_measurements.RunMeasurement()
     data_dir = Path(args.data_dir)
     # Fix the file list and its checksums once, before loading, so metadata
     # describes exactly what was read rather than whatever is on disk by
@@ -557,6 +565,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             Path(external_logging.__file__),
             Path(soynam_data.__file__),
             Path(input_qc.__file__),
+            Path(evaluation_split.__file__),
+            Path(run_measurements.__file__),
             Path(run_manifest.__file__),
         ]
     )
@@ -566,6 +576,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.max_sample_missing_rate,
     )
     dataset = qc.dataset
+    fixed_splits, split_plan = (None, None)
+    if args.split_file is not None:
+        fixed_splits, split_plan = evaluation_split.load_plan(
+            args.split_file, dataset, input_files, args.max_sample_missing_rate
+        )
     splitter = LeaveOneGroupOut()
     total_folds = splitter.get_n_splits(
         dataset.genotypes, dataset.phenotypes, dataset.family_ids
@@ -601,7 +616,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     fold_metric_records: list[dict[str, Any]] = []
 
     for fold_index, (train_indices, test_indices) in enumerate(
-        splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
+        fixed_splits
+        if fixed_splits is not None
+        else splitter.split(dataset.genotypes, dataset.phenotypes, dataset.family_ids)
     ):
         held_out_families = np.unique(dataset.family_ids[test_indices])
         if held_out_families.size != 1:
@@ -674,6 +691,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         }
     )
     run_manifest.verify_input_files_unchanged(family_files, input_files)
+    evaluation_split.verify_unchanged(args.split_file, split_plan)
     run_dir = save_run_artifacts(
         output_dir=Path(args.output_dir),
         dataset=dataset,
@@ -691,6 +709,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         command_arguments=command_arguments,
         min_observed_rate=args.min_marker_observed_rate,
         qc=qc,
+        split_plan=split_plan,
+        measurements=measurement.finish(),
     )
     print(f"run artifacts:             {run_dir}")
 

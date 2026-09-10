@@ -15,6 +15,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Paired experiment artifacts
+comparison_results/
+
 # Only the tiny synthetic producer integration fixtures are distributable.
 !tests/fixtures/gs_panel_producer_v2/**/*.gz
 !tests/fixtures/gs_panel_producer_v2/**/*.tsv

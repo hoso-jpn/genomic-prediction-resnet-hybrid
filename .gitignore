@@ -28,6 +28,9 @@ checkpoints/
 *.pth
 .coverage
 
+# Paired experiment artifacts
+comparison_results/
+
 # Only the tiny synthetic producer integration fixtures are distributable.
 !tests/fixtures/gs_panel_producer_v2/**/*.gz
 !tests/fixtures/gs_panel_producer_v2/**/*.tsv

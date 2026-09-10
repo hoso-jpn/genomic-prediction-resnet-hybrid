@@ -461,3 +461,7 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 ## ライセンス
 
 [MIT License](LICENSE)
+
+## 事前定義したGBLUP・ResNet比較
+
+`compare_baselines.py`のplan/run/reportで同じLOFO分割を固定し、全seedのOOF・精度・計算資源を照合して集計できます。[比較実験の手順と未検証範囲](docs/comparison-experiment.md)を参照してください。実データ・GPU本実験は未実施です。

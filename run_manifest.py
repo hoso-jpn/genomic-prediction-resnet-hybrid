@@ -145,7 +145,7 @@ def library_versions(package_names: Sequence[str]) -> dict[str, str | None]:
     return versions
 
 
-PATH_OPTIONS = frozenset({"--data-dir", "--output-dir"})
+PATH_OPTIONS = frozenset({"--data-dir", "--output-dir", "--split-file"})
 
 
 def _safe_path_identifier(value: str) -> str:
@@ -162,7 +162,7 @@ def sanitize_command(executable: str, argv: Sequence[str]) -> dict[str, Any]:
     """Build a structured command record with no path or credential leakage.
 
     Recognizes the GBLUP/ResNet CLI's known path-bearing options
-    (``--data-dir``, ``--output-dir``) in both "--option value" and
+    (``--data-dir``, ``--output-dir``, ``--split-file``) in both "--option value" and
     "--option=value" forms and replaces their value with a basename-only
     identifier. Unrecognized tokens are kept as-is. Extending this to a
     future sensitive option only requires adding its name to
