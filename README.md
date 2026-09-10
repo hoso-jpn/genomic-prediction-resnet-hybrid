@@ -105,6 +105,10 @@ loaderは読み込み時に次を検証します。
 
 出力される配列のsample順序は、phenotypeファイル内の出現順を維持します。
 
+## 入力の欠損率と除外条件
+
+両baselineの `--max-sample-missing-rate` で個体の欠損率上限、`--min-marker-observed-rate` で学習fold内のmarker観測率閾値を指定できます。既定値は従来の入力と計算を維持します。欠損率・採用maskは既存のrun artifactsへ保存します。閾値境界の違いと親Issueの残条件は[再現性の受入状況](docs/readiness-audit.md)を参照してください。
+
 ## adzuki GSパネルの読み込み
 
 [`hoso-jpn/adzuki-snp-pipeline`](https://github.com/hoso-jpn/adzuki-snp-pipeline)が出力するGenomic Selection (GS) パネルを読み込むローダーです（`adzuki_gs_panel_data.py`）。データ契約は producer 側の[`docs/gs_panel_data_contract.md`](https://github.com/hoso-jpn/adzuki-snp-pipeline/blob/main/docs/gs_panel_data_contract.md)で確定しています。

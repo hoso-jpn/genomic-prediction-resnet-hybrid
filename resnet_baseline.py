@@ -21,6 +21,7 @@ from sklearn.model_selection import LeaveOneGroupOut
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import input_qc
 import model
 import run_manifest
 import soynam_data
@@ -610,6 +611,7 @@ def save_run_artifacts(
     command_arguments: list[str],
     input_files: list[dict[str, str]],
     source_checksums: dict[str, str],
+    qc: input_qc.InputQc | None = None,
 ) -> Path:
     """Assemble this run's metadata/split/preprocessing/metrics and write them.
 
@@ -688,6 +690,7 @@ def save_run_artifacts(
         "hyperparameters": hyperparameters,
         **_device_environment_info(device_requested, device),
         "input_files": input_files,
+        "input_qc": qc.report if qc is not None else None,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -696,6 +699,8 @@ def save_run_artifacts(
         "predictions_ref": "predictions.csv",
     }
 
+    if qc is not None:
+        preprocessing_arrays.update(qc.arrays)
     return run_manifest.write_run_artifacts(
         output_dir=output_dir,
         run_id=run_id,
@@ -718,6 +723,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--pca-components", type=int, default=64)
+    input_qc.add_arguments(parser, marker_default=ResNetConfig().min_observed_rate)
     return parser.parse_args()
 
 
@@ -737,6 +743,7 @@ def main() -> None:
         patience=args.patience,
         batch_size=args.batch_size,
         pca_components=args.pca_components,
+        min_observed_rate=args.min_marker_observed_rate,
     )
     # Fix the file list and its checksums once, before loading, so metadata
     # describes exactly what was read rather than whatever is on disk by
@@ -748,11 +755,16 @@ def main() -> None:
             Path(__file__),
             Path(model.__file__),
             Path(soynam_data.__file__),
+            Path(input_qc.__file__),
             Path(run_manifest.__file__),
         ]
     )
 
-    dataset = load_soynam_dataset(args.data_dir, family_files=family_files)
+    qc = input_qc.apply_sample_qc(
+        load_soynam_dataset(args.data_dir, family_files=family_files),
+        args.max_sample_missing_rate,
+    )
+    dataset = qc.dataset
     predictions, fold_records = run_lofo(dataset, config, device)
     predictions_frame = make_oof_frame(dataset, predictions)
     run_manifest.verify_input_files_unchanged(family_files, input_files)
@@ -767,6 +779,7 @@ def main() -> None:
         command_arguments=sys.argv[1:],
         input_files=input_files,
         source_checksums=source_checksums,
+        qc=qc,
     )
     print(f"run artifacts: {run_dir}")
 
