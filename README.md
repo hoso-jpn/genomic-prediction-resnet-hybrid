@@ -4,7 +4,7 @@
 
 SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量を予測し、未知の家系への外挿性能を評価する研究用リポジトリです。
 
-現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweepはexperimentalとして分離しています。Docker / Docker Composeは、単体テストとResNet CPU smokeについて検証済みです。
+現在の再現性検証済み経路は、family単位のLeave-One-Family-Out cross-validation（LOFO-CV）を行うGBLUPとResNetの2つのベースラインです。旧来のGNN、W&B Sweepはexperimentalとして分離しています。Docker / Docker Composeは、単体テストとCPU smoke（GBLUP・ResNet）について検証済みです。
 
 ## 実装状況
 
@@ -13,7 +13,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
-| 単体テスト・synthetic CPU smoke | CI実行 | `tests/`, `.github/workflows/ci.yml` |
+| 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
 | Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
 | Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
 | 旧ResNet学習・W&B Sweep | experimental | `main.py`, `sweep_config.yaml` |
@@ -106,18 +106,32 @@ loaderは読み込み時に次を検証します。
 
 ### GBLUP baseline
 
-現在のGBLUP CLIは`data/`、16 family、`gblup_results/`を前提とします。W&Bへ送信せずローカルで再現する場合はoffline modeを使います。
-
 ```bash
-WANDB_MODE=offline \
-  uv run --frozen --extra gblup \
-  python gblup_baseline.py
+uv run --frozen --extra gblup \
+  python gblup_baseline.py \
+  --data-dir data \
+  --output-dir gblup_results \
+  --expected-families 16
 ```
+
+主なCLI引数は`--data-dir`、`--output-dir`、`--expected-families`、`--wandb-mode`です。既定値は`data`、`gblup_results`、`16`、`disabled`で、引数を省略した場合の入力・出力・家系数はこれまでと同じです。外部サービスの認証情報は不要です。
+
+`--expected-families`は家系数チェックを無効化するためのものではなく、期待する家系数の指定です。読み込んだデータの家系数が一致しない場合は実行前に失敗します（LOFO-CVの都合上、2未満は指定できません）。
 
 出力:
 
 ```text
 gblup_results/oof_predictions.csv
+```
+
+3 familyのsyntheticデータなど、16家系以外のデータで配線を確認する例:
+
+```bash
+uv run --frozen --extra gblup \
+  python gblup_baseline.py \
+  --data-dir /path/to/synthetic_data \
+  --output-dir gblup_smoke_results \
+  --expected-families 3
 ```
 
 ### ResNet baseline
@@ -148,6 +162,27 @@ uv run --frozen --extra gblup \
 
 1 epochの実行は配線と出力契約の確認用であり、予測精度の評価には使用しません。
 
+## W&B（Weights & Biases）の扱い
+
+GBLUPの外部ロギングは`--wandb-mode`だけで決まります。
+
+| `--wandb-mode` | W&Bの初期化 | 外部送信 | ローカル出力 |
+|---|---|---|---|
+| `disabled`（既定） | 行わない（`import wandb`もしない） | なし | run成果物のみ |
+| `offline` | 行う | なし | run成果物 + ローカルW&B run directory |
+| `online` | 行う | あり（API key等の認証情報が必要） | run成果物 + W&Bサービス上のrun |
+
+優先順位は次のとおりです。
+
+- CLIの`--wandb-mode`が唯一の決定要素です。`WANDB_MODE`等の環境変数でmodeを変更することはできません。
+- `offline`・`online`を選んだ場合、`wandb.init`の直前にプロセスの`WANDB_MODE`を選択値へ上書きし、同じ値を`wandb.init(mode=...)`にも渡します。周囲の環境変数が`offline`を`online`へ引き上げることはありません。
+- 既定は`disabled`です。`WANDB_MODE=online`が設定された環境で引数なしに実行しても、W&Bは初期化されません。`online`にできるのは`--wandb-mode online`を明示した場合だけです。
+- CLI引数の検証とデータ読み込み・家系数チェックは、W&Bの初期化より前に行います。引数や入力が不正な実行がW&B上にrunを作ることはありません。
+
+ResNet（`resnet_baseline.py`）はW&Bを使用しません。実行の記録は両ベースラインとも[成果物](#成果物)節のrun artifactsが担います。
+
+コードの公開は、研究データやログを外部サービスへ送信する許可を意味しません。`online`は利用者自身が明示的に選ぶ操作です。
+
 ## 成果物
 
 GBLUP・ResNetは、実行ごとに再現性の追跡・監査に必要な成果物を`<output-dir>/artifacts/<run_id>/`へ保存します（`gblup_results/artifacts/...`・`resnet_results/artifacts/...`）。ルート直下の共通`artifacts/`は使用せず、`docker-compose.yml`の既存bind mount（`./gblup_results`・`./resnet_results`）だけで書き込み先を確保できます。
@@ -158,6 +193,8 @@ gblup_results/
   artifacts/
     <run_id>/
       metadata.json          # run_id、git commit、依存バージョン、入力ファイル情報など
+                             #   GBLUPは hyperparameters.expected_family_count と
+                             #   external_logging.mode（W&Bのmode）も記録する
       split.json             # outer（LOFO）split。GBLUPは inner: null
       preprocessing.json     # 欠損率・MAF等の設定値とfold単位の要約統計
       preprocessing_arrays.npz  # fold単位の実数値配列（marker mask、imputation mean等）
@@ -214,7 +251,7 @@ docker compose run --rm unit-test
 
 ### CPU smoke test（cpu-smoke）
 
-3 familyのsynthetic dataのみを使い、`resnet_baseline.py`のCLIと4列のOOF出力契約を検証します。外部データ・GPU・`.env`・W&B API keyは不要です。
+3 familyのsynthetic dataのみを使い、`gblup_baseline.py`・`resnet_baseline.py`のCLIと4列のOOF出力契約、run成果物6ファイルを検証します。外部データ・GPU・`.env`・W&B API keyは不要です。GBLUP側は、`WANDB_MODE=online`が設定された環境でも既定のままではW&Bを初期化しないことも確認します。
 
 ```bash
 docker compose build cpu-smoke
@@ -226,15 +263,25 @@ docker compose run --rm cpu-smoke
 `gblup`・`resnet`サービスは、実データを保有する利用者が手動で起動する経路です。`profiles: ["real-data"]`が付いており、CIでは実行しません。実行前に、[入力データ](#入力データ)節と同じ形式のSoyNAMデータを`./data`に配置してください。`data/`はいずれもread-onlyでmountし、結果ディレクトリのみ書き込み可能にしています。
 
 ```bash
-# GBLUP（現時点のCLIはdata/、16 family、gblup_results/を前提とするため、
-# 家系数が異なるデータでは完走しません）
+# GBLUP（--data-dir data --output-dir gblup_results --expected-families 16）
 docker compose --profile real-data run --rm gblup
 
 # ResNet
 docker compose --profile real-data run --rm resnet
 ```
 
-`gblup`サービスは`WANDB_MODE=offline`をCompose側で設定しているため、W&B API keyは不要です。実データが無い状態でこれらのサービスを実行した場合の挙動（`FileNotFoundError`等）はCIでの検証対象にしていません。
+`gblup`サービスはW&Bを既定の`disabled`で実行するため、W&B API keyも`WANDB_MODE`の設定も不要です。家系数が16以外のデータを使う場合や、W&Bのmodeを変える場合は、サービス定義の`command`を上書きします。
+
+```bash
+docker compose --profile real-data run --rm gblup \
+  python gblup_baseline.py \
+  --data-dir data \
+  --output-dir gblup_results \
+  --expected-families 8 \
+  --wandb-mode offline
+```
+
+実データが無い状態でこれらのサービスを実行した場合の挙動（`FileNotFoundError`等）はCIでの検証対象にしていません。
 
 ### legacy / experimental
 
@@ -269,11 +316,10 @@ uv run --frozen --extra gblup \
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うResNet CPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
+GitHub Actionsでは、対象コードのformat/lint、単体テストスイート、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
-- GBLUPはdata directory、出力先、16 familyをCLIで変更できません（Docker Composeの`gblup`サービスも同じ制約を継承します）。
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
 - GPUでの本実験、精度比較、統計的不確実性の評価は未実施です。

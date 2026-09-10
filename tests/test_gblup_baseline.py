@@ -1,8 +1,30 @@
+import contextlib
+import io
+import os
+import sys
+import types
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
 import gblup_baseline as gblup
+
+
+def _fake_wandb_module() -> types.ModuleType:
+    """Build a stand-in W&B module that records calls and contacts nothing.
+
+    Every test below injects this into ``sys.modules``; no test imports the
+    real client or opens a network connection, so an ``online`` selection is
+    only ever observed as the arguments the CLI would have passed.
+    """
+    module = types.ModuleType("wandb")
+    module.calls = []
+    module.init = lambda **kwargs: module.calls.append(("init", kwargs))
+    module.log = lambda payload: module.calls.append(("log", payload))
+    module.finish = lambda: module.calls.append(("finish", None))
+    return module
 
 
 def _make_predictive_dataset() -> tuple[
@@ -228,6 +250,176 @@ class GblupBaselineTest(unittest.TestCase):
         np.testing.assert_allclose(
             arrays[observed_rate_key], relationships.observed_rates
         )
+
+
+class GblupCliTest(unittest.TestCase):
+    def test_defaults_preserve_the_previous_fixed_behaviour(self) -> None:
+        args = gblup.parse_args([])
+
+        self.assertEqual(args.data_dir, Path("data"))
+        self.assertEqual(args.output_dir, Path("gblup_results"))
+        self.assertEqual(args.expected_families, 16)
+
+    def test_external_logging_is_off_by_default(self) -> None:
+        self.assertEqual(gblup.parse_args([]).wandb_mode, "disabled")
+
+    def test_arguments_are_read_from_the_command_line(self) -> None:
+        args = gblup.parse_args(
+            [
+                "--data-dir",
+                "/tmp/input",
+                "--output-dir",
+                "/tmp/output",
+                "--expected-families",
+                "3",
+                "--wandb-mode",
+                "offline",
+            ]
+        )
+
+        self.assertEqual(args.data_dir, Path("/tmp/input"))
+        self.assertEqual(args.output_dir, Path("/tmp/output"))
+        self.assertEqual(args.expected_families, 3)
+        self.assertEqual(args.wandb_mode, "offline")
+
+    def test_family_count_below_two_is_rejected(self) -> None:
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            gblup.parse_args(["--expected-families", "1"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--expected-families must be at least 2", stderr.getvalue())
+
+    def test_unknown_wandb_mode_is_rejected(self) -> None:
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            gblup.parse_args(["--wandb-mode", "enabled"])
+
+        self.assertEqual(raised.exception.code, 2)
+
+
+class GblupRunLoggerTest(unittest.TestCase):
+    def test_disabled_mode_never_initializes_wandb(self) -> None:
+        fake = _fake_wandb_module()
+        with (
+            mock.patch.dict(sys.modules, {"wandb": fake}),
+            mock.patch.dict(os.environ, {"WANDB_MODE": "online"}, clear=False),
+        ):
+            logger = gblup.create_run_logger("disabled", config={"a": 1})
+            logger.log({"metric": 1.0})
+            logger.finish()
+
+            self.assertIsInstance(logger, gblup.NullRunLogger)
+            self.assertEqual(fake.calls, [])
+            # A disabled run leaves the surrounding environment untouched
+            # instead of reconfiguring a client it never starts.
+            self.assertEqual(os.environ["WANDB_MODE"], "online")
+
+    def test_offline_mode_is_not_escalated_by_the_environment(self) -> None:
+        fake = _fake_wandb_module()
+        with (
+            mock.patch.dict(sys.modules, {"wandb": fake}),
+            mock.patch.dict(os.environ, {"WANDB_MODE": "online"}, clear=False),
+        ):
+            logger = gblup.create_run_logger("offline", config={"family_count": 3})
+
+            self.assertIsInstance(logger, gblup.WandbRunLogger)
+            self.assertEqual(os.environ["WANDB_MODE"], "offline")
+
+        self.assertEqual(len(fake.calls), 1)
+        name, kwargs = fake.calls[0]
+        self.assertEqual(name, "init")
+        self.assertEqual(kwargs["mode"], "offline")
+        self.assertEqual(kwargs["config"], {"family_count": 3})
+
+    def test_online_mode_requires_an_explicit_selection(self) -> None:
+        fake = _fake_wandb_module()
+        with (
+            mock.patch.dict(sys.modules, {"wandb": fake}),
+            mock.patch.dict(os.environ, {"WANDB_MODE": "offline"}, clear=False),
+        ):
+            logger = gblup.create_run_logger("online", config={})
+            logger.log({"gblup/r": 0.5})
+            logger.finish()
+
+            self.assertEqual(os.environ["WANDB_MODE"], "online")
+
+        self.assertEqual(
+            fake.calls,
+            [
+                ("init", fake.calls[0][1]),
+                ("log", {"gblup/r": 0.5}),
+                ("finish", None),
+            ],
+        )
+        self.assertEqual(fake.calls[0][1]["mode"], "online")
+
+    def test_unknown_mode_is_rejected_before_importing_wandb(self) -> None:
+        fake = _fake_wandb_module()
+        with (
+            mock.patch.dict(sys.modules, {"wandb": fake}),
+            self.assertRaisesRegex(ValueError, "unknown W&B mode"),
+        ):
+            gblup.create_run_logger("enabled", config={})
+
+        self.assertEqual(fake.calls, [])
+
+
+class GblupRunSettingsMetadataTest(unittest.TestCase):
+    def test_metadata_records_the_resolved_run_settings(self) -> None:
+        written: dict[str, object] = {}
+
+        def fake_write_run_artifacts(**kwargs: object) -> Path:
+            written.update(kwargs)
+            return Path("gblup_results/artifacts/run")
+
+        dataset = types.SimpleNamespace(
+            genotypes=np.zeros((4, 2)),
+            phenotypes=np.arange(4.0),
+            family_ids=np.array(["A", "A", "B", "B"]),
+            sample_names=np.array(["s1", "s2", "s3", "s4"]),
+        )
+        frame = gblup.pd.DataFrame(
+            {
+                "family_id": dataset.family_ids,
+                "sample_name": dataset.sample_names,
+                "observed_yield_kg_ha": dataset.phenotypes,
+                "predicted_yield_kg_ha": dataset.phenotypes,
+            }
+        )
+
+        with mock.patch.object(
+            gblup.run_manifest, "write_run_artifacts", fake_write_run_artifacts
+        ):
+            gblup.save_run_artifacts(
+                output_dir=Path("gblup_results"),
+                dataset=dataset,
+                predictions_frame=frame,
+                fold_preprocessing_records=[],
+                preprocessing_arrays={},
+                fold_metric_records=[],
+                macro_correlation=0.1,
+                pooled_correlation=0.2,
+                pooled_rmse=3.0,
+                input_files=[],
+                source_checksums={},
+                expected_family_count=3,
+                wandb_mode="offline",
+                command_arguments=["--data-dir", "/private/input"],
+            )
+
+        metadata = written["metadata"]
+        self.assertEqual(metadata["hyperparameters"]["expected_family_count"], 3)
+        self.assertEqual(
+            metadata["external_logging"], {"backend": "wandb", "mode": "offline"}
+        )
+        self.assertEqual(metadata["command"]["arguments"], ["--data-dir", "input"])
 
 
 if __name__ == "__main__":

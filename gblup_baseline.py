@@ -8,7 +8,10 @@ computed from the training families independently in every LOFO fold.
 
 from __future__ import annotations
 
+import argparse
+import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,14 @@ MIN_OBSERVED_RATE = 0.10
 MAF_THRESHOLD = 0.05
 VARIANCE_THRESHOLD = 1e-6
 EXPECTED_FAMILY_COUNT = 16
+MIN_EXPECTED_FAMILY_COUNT = 2
+DEFAULT_DATA_DIR = Path("data")
+DEFAULT_OUTPUT_DIR = Path("gblup_results")
+WANDB_MODES = ("disabled", "offline", "online")
+DEFAULT_WANDB_MODE = "disabled"
+WANDB_PROJECT = "genomic-resnet-prediction-hy"
+WANDB_JOB_TYPE = "gblup_baseline"
+WANDB_RUN_NAME = "gblup-lofo-leakage-safe"
 
 
 @dataclass(frozen=True)
@@ -374,6 +385,9 @@ def save_run_artifacts(
     pooled_rmse: float,
     input_files: list[dict[str, str]],
     source_checksums: dict[str, str],
+    expected_family_count: int = EXPECTED_FAMILY_COUNT,
+    wandb_mode: str = DEFAULT_WANDB_MODE,
+    command_arguments: Sequence[str] | None = None,
 ) -> Path:
     """Assemble this run's metadata/split/preprocessing/metrics and write them.
 
@@ -381,7 +395,14 @@ def save_run_artifacts(
     start of the run (before training) and passed in as-is, so the recorded
     checksums describe what was actually read rather than whatever happens
     to be on disk when the run finishes.
+
+    ``expected_family_count`` and ``wandb_mode`` are the CLI-resolved run
+    settings; recording them here keeps ``metadata.json`` an accurate
+    description of the run that produced the artifacts instead of the
+    module defaults. ``command_arguments`` defaults to ``sys.argv[1:]`` so
+    the recorded (sanitized) command matches what was actually parsed.
     """
+    arguments = list(sys.argv[1:] if command_arguments is None else command_arguments)
     families = sorted({str(family_id) for family_id in dataset.family_ids})
     split = {
         "schema_version": run_manifest.SCHEMA_VERSION,
@@ -421,7 +442,7 @@ def save_run_artifacts(
         "model_name": "gblup",
         "git_commit": run_manifest.git_commit_sha(Path(__file__).resolve().parent),
         "source_file_checksums": source_checksums,
-        "command": run_manifest.sanitize_command(Path(sys.argv[0]).name, sys.argv[1:]),
+        "command": run_manifest.sanitize_command(Path(sys.argv[0]).name, arguments),
         "seed": None,
         "python_version": run_manifest.python_version(),
         "library_versions": run_manifest.library_versions(
@@ -431,7 +452,9 @@ def save_run_artifacts(
             "min_observed_rate": MIN_OBSERVED_RATE,
             "maf_threshold": MAF_THRESHOLD,
             "relationship": "VanRaden-1",
+            "expected_family_count": int(expected_family_count),
         },
+        "external_logging": {"backend": "wandb", "mode": wandb_mode},
         "input_files": input_files,
         "families": families,
         "split_ref": "split.json",
@@ -453,11 +476,114 @@ def save_run_artifacts(
     )
 
 
-def main() -> None:
-    """Execute family-wise LOFO cross-validation."""
+class NullRunLogger:
+    """Logger used when external experiment logging is disabled.
+
+    Instantiating this never imports or initializes W&B, so a disabled run
+    performs no external logging setup at all rather than initializing a
+    client and then suppressing its output.
+    """
+
+    mode = "disabled"
+
+    def log(self, payload: dict[str, Any]) -> None:
+        return None
+
+    def finish(self) -> None:
+        return None
+
+
+class WandbRunLogger:
+    """Logger backed by an already-initialized W&B run."""
+
+    def __init__(self, module: Any, mode: str) -> None:
+        self._module = module
+        self.mode = mode
+
+    def log(self, payload: dict[str, Any]) -> None:
+        self._module.log(payload)
+
+    def finish(self) -> None:
+        self._module.finish()
+
+
+def create_run_logger(
+    mode: str, *, config: dict[str, Any]
+) -> NullRunLogger | WandbRunLogger:
+    """Create the run logger for ``mode``, importing W&B only when used.
+
+    The CLI selection is authoritative: ``WANDB_MODE`` is overwritten with
+    the resolved mode before ``wandb.init``, and the same value is passed
+    to ``wandb.init`` explicitly, so an ambient environment variable can
+    neither escalate ``offline`` to ``online`` nor re-enable a run the
+    caller asked to disable. ``offline`` keeps W&B's local run directory
+    but sends nothing to the service.
+    """
+    if mode not in WANDB_MODES:
+        raise ValueError(f"unknown W&B mode: {mode!r}")
+    if mode == "disabled":
+        return NullRunLogger()
+
     import wandb
 
-    data_dir = Path("data")
+    os.environ["WANDB_MODE"] = mode
+    wandb.init(
+        project=WANDB_PROJECT,
+        job_type=WANDB_JOB_TYPE,
+        name=WANDB_RUN_NAME,
+        mode=mode,
+        config=config,
+    )
+    return WandbRunLogger(wandb, mode)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the GBLUP CLI arguments.
+
+    Defaults reproduce the previous fixed behaviour (``data/``,
+    ``gblup_results/``, 16 families) so an existing invocation without
+    arguments is unchanged, except that external logging is now off unless
+    it is requested explicitly.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--expected-families",
+        type=int,
+        default=EXPECTED_FAMILY_COUNT,
+        help=(
+            "number of families the input data must contain; the run fails "
+            "if the loaded data does not match (default: "
+            f"{EXPECTED_FAMILY_COUNT})"
+        ),
+    )
+    parser.add_argument(
+        "--wandb-mode",
+        choices=WANDB_MODES,
+        default=DEFAULT_WANDB_MODE,
+        help=(
+            "Weights & Biases mode. 'disabled' (default) never initializes "
+            "W&B, 'offline' writes local W&B files only, and 'online' is the "
+            "only setting that sends data to the service"
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.expected_families < MIN_EXPECTED_FAMILY_COUNT:
+        parser.error(
+            "--expected-families must be at least "
+            f"{MIN_EXPECTED_FAMILY_COUNT} for leave-one-family-out "
+            f"cross-validation (got {args.expected_families})"
+        )
+    return args
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Execute family-wise LOFO cross-validation."""
+    args = parse_args(argv)
+    command_arguments = list(sys.argv[1:] if argv is None else argv)
+
+    data_dir = Path(args.data_dir)
     # Fix the file list and its checksums once, before loading, so metadata
     # describes exactly what was read rather than whatever is on disk by
     # the time this (potentially long) run finishes.
@@ -475,15 +601,15 @@ def main() -> None:
     expected_folds = np.unique(dataset.family_ids).size
     if total_folds != expected_folds:
         raise RuntimeError("LOFO fold count does not match the family count")
-    if expected_folds != EXPECTED_FAMILY_COUNT:
+    if expected_folds != args.expected_families:
         raise RuntimeError(
-            f"expected {EXPECTED_FAMILY_COUNT} SoyNAM families, found {expected_folds}"
+            f"expected {args.expected_families} families, found {expected_folds}"
         )
 
-    wandb.init(
-        project="genomic-resnet-prediction-hy",
-        job_type="gblup_baseline",
-        name="gblup-lofo-leakage-safe",
+    # Argument and input validation above runs before any external logging
+    # is started, so a rejected run never opens a W&B run.
+    logger = create_run_logger(
+        args.wandb_mode,
         config={
             "sample_count": dataset.phenotypes.size,
             "marker_count": dataset.genotypes.shape[1],
@@ -528,7 +654,7 @@ def main() -> None:
             f"{family_label:22s} r={correlation:.4f} rmse={rmse:.2f} "
             f"markers={relationships.retained_markers.sum()}"
         )
-        wandb.log(
+        logger.log(
             {
                 "fold": fold_index + 1,
                 "gblup/r": correlation,
@@ -576,7 +702,7 @@ def main() -> None:
     )
     run_manifest.verify_input_files_unchanged(family_files, input_files)
     run_dir = save_run_artifacts(
-        output_dir=Path("gblup_results"),
+        output_dir=Path(args.output_dir),
         dataset=dataset,
         predictions_frame=predictions_frame,
         fold_preprocessing_records=fold_preprocessing_records,
@@ -587,6 +713,9 @@ def main() -> None:
         pooled_rmse=pooled_rmse,
         input_files=input_files,
         source_checksums=source_checksums,
+        expected_family_count=args.expected_families,
+        wandb_mode=args.wandb_mode,
+        command_arguments=command_arguments,
     )
     print(f"run artifacts:             {run_dir}")
 
@@ -595,7 +724,7 @@ def main() -> None:
     print(f"GBLUP LOFO pooled OOF r:   {pooled_correlation:.4f}")
     print(f"GBLUP LOFO pooled RMSE:    {pooled_rmse:.2f} kg/ha")
     print(f"successful folds:          {fold_count}/{total_folds}")
-    wandb.log(
+    logger.log(
         {
             "summary/macro_family_r": macro_correlation,
             "summary/pooled_oof_r": pooled_correlation,
@@ -604,7 +733,7 @@ def main() -> None:
             "summary/total_folds": total_folds,
         }
     )
-    wandb.finish()
+    logger.finish()
 
 
 if __name__ == "__main__":
