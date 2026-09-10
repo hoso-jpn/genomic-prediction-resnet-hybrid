@@ -46,6 +46,8 @@ jobs:
           adzuki_gs_panel_data.py
           external_logging.py
           legacy_guard.py
+          losses.py
+          gene_graph.py
           tests
 
       - name: Run Ruff
@@ -59,6 +61,8 @@ jobs:
           adzuki_gs_panel_data.py
           external_logging.py
           legacy_guard.py
+          losses.py
+          gene_graph.py
           tests
 
       - name: Run unit tests
