@@ -349,6 +349,8 @@ uv run --frozen --extra gblup python main.py --allow-legacy
 - `--allow-legacy`はコマンドライン引数です。Docker Composeの`--profile legacy`指定や、W&B sweep agentの起動だけではこの確認を満たしません。Composeでlegacyを実行する場合は`docker compose --profile legacy run --rm train python3 main.py --allow-legacy`のようにコマンドを明示的に上書きし、sweepの場合は`sweep_config.yaml`の`command`へ自分で追記します。
 - legacy許可と外部ロギング許可は分離しています。`--allow-legacy`を付けてもW&Bは初期化されず、`--wandb-mode offline` / `online`を別途明示した場合だけ有効になります。
 - `main.py`は`family_id`列を必須にします。欠落時にrandom CVへ暗黙に切り替えることはせず、明確に失敗します。
+- GNN（`train_gnn.py`）のグラフ入力は「重複のない双方向エッジ列」を契約とします。`gene_adj.csv`は各無向ペア{u,v}について`(u,v)`と`(v,u)`をそれぞれ1本だけ含み、loaderは読み込み後に逆方向を再連結しません。gene IDは`[0, num_genes)`の整数で、`num_genes`は`snp_to_gene_map.csv`から導出します。自己ループ・重複・片方向・範囲外ID・空のエッジ集合は読み込み時に明確に失敗します（`gene_graph.py`）。生成側（`create_dummy_graph_data.py`）は同じ共通実装で正規化して出力するため、生成物とloaderの表現が一致します。
+- 損失関数`CorrelationLoss`は副作用のない`losses.py`にあり、`main.py`・`train_gnn.py`の双方がここからimportします（importだけでW&Bや学習は開始しません）。
 - 実行ログの冒頭・末尾と、`preprocess.py`が生成する`processed_data_hy/EXPERIMENTAL.txt`にexperimentalである旨を出力します。
 - legacyの出力は家系内で標準化した表現型に対する指標であり、検証済み経路のraw kg/haのOOF性能とは比較できません。W&B Sweepの探索目標はouter LOFOの集計値であるため、探索後の最高値も独立した汎化性能の証跡にはなりません。これらを検証済み性能として引用しないでください。
 
@@ -384,12 +386,12 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 uv run --frozen --extra gblup \
   ruff format --check \
   gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py tests
+  external_logging.py legacy_guard.py losses.py gene_graph.py tests
 
 uv run --frozen --extra gblup \
   ruff check \
   gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  external_logging.py legacy_guard.py tests
+  external_logging.py legacy_guard.py losses.py gene_graph.py tests
 
 uv run --frozen --extra gblup pytest -q
 ```
