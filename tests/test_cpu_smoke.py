@@ -38,13 +38,14 @@ COMMON_METADATA_KEYS = (
     "metrics_ref",
     "predictions_ref",
 )
-REQUIRED_METADATA_KEYS = COMMON_METADATA_KEYS + (
+REQUIRED_METADATA_KEYS = (
+    *COMMON_METADATA_KEYS,
     "device_requested",
     "device_resolved",
     "cuda_version",
     "cudnn_version",
 )
-GBLUP_METADATA_KEYS = COMMON_METADATA_KEYS + ("external_logging",)
+GBLUP_METADATA_KEYS = (*COMMON_METADATA_KEYS, "external_logging")
 OOF_COLUMNS = [
     "family_id",
     "sample_name",

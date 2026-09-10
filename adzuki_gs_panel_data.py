@@ -199,9 +199,7 @@ def verify_checksums(
     checksums = manifest.get("checksums")
     if not isinstance(checksums, dict):
         # A malformed manifest is bad data, not a caller type error.
-        raise ValueError(  # noqa: TRY004
-            "manifest is missing the checksums block"
-        )
+        raise ValueError("manifest is missing the checksums block")
     for filename in filenames:
         expected = checksums.get(filename)
         if expected is None:

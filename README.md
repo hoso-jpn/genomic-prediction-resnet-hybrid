@@ -112,10 +112,10 @@ loaderは読み込み時に次を検証します。
 ```python
 from adzuki_gs_panel_data import load_gs_panel
 
-panel = load_gs_panel("path/to/gs_panel")       # cohortが1つならcohort_idは省略可
-panel.genotypes                                  # sample行 × variant列（float64、欠損はNaN）
-panel.sample_ids, panel.variant_keys             # メタデータは配列として分離
-panel.sample_metadata, panel.variant_metadata    # producerのTSVをそのまま保持
+panel = load_gs_panel("path/to/gs_panel")  # cohortが1つならcohort_idは省略可
+panel.genotypes  # sample行 × variant列（float64、欠損はNaN）
+panel.sample_ids, panel.variant_keys  # メタデータは配列として分離
+panel.sample_metadata, panel.variant_metadata  # producerのTSVをそのまま保持
 ```
 
 読み込む4ファイル（`<cohort_id>.gs_panel.genotype_matrix.tsv.gz`・`sample_metadata.tsv`・`variant_metadata.tsv`・`manifest.json`）のうち、genotype matrixはファイル上がvariant行 × sample列で、`soynam_data.py`の`_load_genotype_frame`と同じく読み込み後に転置します。dosageは`0/0`→-1、ヘテロ→0、`1/1`→+1、欠損→`nan`で、既存の`GENOTYPE_ENCODING`と同一のadditive scaleです。
@@ -425,20 +425,14 @@ GBLUPとResNetは同じ4列のCSVを出力します。
 ## テストとCI
 
 ```bash
-uv run --frozen --extra gblup \
-  ruff format --check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  adzuki_gs_panel_data.py external_logging.py legacy_guard.py losses.py gene_graph.py tests
+uv run --frozen --extra gblup ruff format --check .
 
-uv run --frozen --extra gblup \
-  ruff check \
-  gblup_baseline.py resnet_baseline.py soynam_data.py run_manifest.py \
-  adzuki_gs_panel_data.py external_logging.py legacy_guard.py losses.py gene_graph.py tests
+uv run --frozen --extra gblup ruff check .
 
 uv run --frozen --extra gblup pytest -q
 ```
 
-GitHub Actionsでは、対象コードのformat/lint、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
+GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruff format --check .` / `ruff check .`。除外は`pyproject.toml`の`extend-exclude`）、単体テストスイート（legacy経路の`--allow-legacy`確認を含む）、3 familyのsynthetic dataを使うGBLUP・ResNetのCPU smoke testを実行します。加えて、別ジョブでDocker Composeの設定検証、イメージbuild、`unit-test`・`cpu-smoke`サービスの実行、bind mountなしでのソース配置確認、rpy2非依存の確認を行います。実データ・GPU・W&B API keyはCIへ含めません。`gblup`・`resnet`（実データ）と`legacy`profileのサービスはCIで実行しません。
 
 ## 既知の制約
 
@@ -449,8 +443,8 @@ GitHub Actionsでは、対象コードのformat/lint、単体テストスイー�
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
+- Ruffの設定は`pyproject.toml`の`[tool.ruff]`に明示しています（`target-version = "py311"`、`line-length = 88`、採用ルールを`select`で列挙）。行長ルール`E501`とzipの`strict`指定（`B905`）は採用していません。前者はformatterのline-lengthで担保し、後者は実行時挙動が変わるため機械的整形とは分けて扱います。
 - `adzuki_gs_panel_data.py`はproducer実コード由来のsyntheticパネルで結合確認済みですが、実コホート・大規模パネルと、GSモデルの学習・評価は未検証です。
-- CIのRuff対象は新しいベースライン実装と`tests/`に限定され、legacy scripts全体の整形は保証しません。
 
 ## データ引用
 

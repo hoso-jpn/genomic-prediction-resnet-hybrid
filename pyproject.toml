@@ -36,3 +36,39 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+# 対象は管理対象のPythonコード全体。data/・実行ログ・生成物・仮想環境は
+# 元々.pyを含まないが、誤って対象へ入らないよう明示的に除外する。
+line-length = 88
+target-version = "py311"
+extend-exclude = [
+    "data",
+    "processed_data",
+    "processed_data_hy",
+    "gblup_results",
+    "resnet_results",
+    "logs",
+    "wandb",
+    "pretrained_models",
+]
+
+[tool.ruff.lint]
+# 現行の標準ルールを基準に、採用ルールを明示する。
+#   E4/E7/E9・F: pycodestyle(import/statement/構文)とpyflakes
+#   W: 末尾空白・改行
+#   I: import順
+#   UP: 現行のPython 3.11に合わせた書き方
+#   B・SIM・C4・ISC・RUF: よくある不具合とわかりにくい書き方
+# E501（行長）はformatterが整形しない日本語コメント・文字列を大量に
+# 巻き込むため採用しない。行長はformatter側のline-lengthで担保する。
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "SIM", "C4", "ISC", "RUF"]
+ignore = [
+    # 日本語のコメント・文字列を全角記号ごと誤検出するため除外する
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # zip(..., strict=) の付与は長さ不一致時の実行時挙動を変えるため、
+    # 機械的整形とは分けて別Issueで扱う
+    "B905",
+]

@@ -75,10 +75,9 @@ def main():
             cohort_id=cohort,
             pipeline_version="synthetic-fixture",
             git_commit=commit,
-            containers={
-                process: "fixture/unused:synthetic"
-                for process in manifest_builder["CONTAINER_PROCESS_NAMES"]
-            },
+            containers=dict.fromkeys(
+                manifest_builder["CONTAINER_PROCESS_NAMES"], "fixture/unused:synthetic"
+            ),
             sample_ploidy=2,
             snp_filter_params={},
             panel_status="populated" if rows else "empty",

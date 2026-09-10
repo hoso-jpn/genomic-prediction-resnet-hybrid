@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +6,7 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 
 class _Unsqueeze(nn.Module):
     """nn.Sequential 内で unsqueeze を使うためのユーティリティ (nn.Unsqueeze は存在しないため)"""
+
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
@@ -17,6 +17,7 @@ class _Unsqueeze(nn.Module):
 
 class ConvResidualBlock(nn.Module):
     """1D Convolutional Residual Block."""
+
     def __init__(self, channels, kernel_size=7, dropout_rate=0.4):
         super().__init__()
         self.block = nn.Sequential(
@@ -33,7 +34,15 @@ class ConvResidualBlock(nn.Module):
 
 
 class GatedGenomicResNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_blocks=3, dropout_rate=0.4, pc_dim=None, kernel_size=7):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim=64,
+        num_blocks=3,
+        dropout_rate=0.4,
+        pc_dim=None,
+        kernel_size=7,
+    ):
         super().__init__()
         self.pc_dim = pc_dim
 
@@ -45,8 +54,12 @@ class GatedGenomicResNet(nn.Module):
             nn.Conv1d(1, hidden_dim, kernel_size=1),
             nn.BatchNorm1d(hidden_dim),
             nn.GELU(),
-            *[ConvResidualBlock(hidden_dim, kernel_size=kernel_size, dropout_rate=dropout_rate)
-              for _ in range(num_blocks)],
+            *[
+                ConvResidualBlock(
+                    hidden_dim, kernel_size=kernel_size, dropout_rate=dropout_rate
+                )
+                for _ in range(num_blocks)
+            ],
         )
 
         self.global_avg_pool = nn.AdaptiveAvgPool1d(1)
@@ -72,6 +85,7 @@ class GraphGenomicNet(nn.Module):
     """
     SNP情報を遺伝子グラフ上で集約・伝播するGNNモデル。
     """
+
     def __init__(self, num_genes, hidden_dim=128, num_layers=3, dropout_rate=0.4):
         super().__init__()
         self.num_genes = num_genes
@@ -101,7 +115,9 @@ class GraphGenomicNet(nn.Module):
         #    (N * L,) -> (N * num_genes, 1)
         #    Bug fix: dim_size は N * num_genes = batch_mapping.size(0) が正しい。
         #    旧コードの self.num_genes * x_snp.size(0) は num_genes * N * L になり誤り。
-        gene_features = torch.zeros(num_nodes, 1, device=x_snp.device, dtype=x_snp.dtype)
+        gene_features = torch.zeros(
+            num_nodes, 1, device=x_snp.device, dtype=x_snp.dtype
+        )
         gene_counts = torch.zeros(num_nodes, 1, device=x_snp.device, dtype=x_snp.dtype)
         idx = snp_to_gene_map.unsqueeze(1)
         gene_features.scatter_add_(0, idx, x_snp.unsqueeze(1))
@@ -113,7 +129,10 @@ class GraphGenomicNet(nn.Module):
         #    個体1以降のノード(num_genes〜N*num_genes-1)にエッジが届かない。
         #    各個体ごとに i * num_genes のオフセットを加えて N コピーを連結する。
         E = edge_index.size(1)
-        offsets = torch.arange(N, device=edge_index.device).repeat_interleave(E) * self.num_genes
+        offsets = (
+            torch.arange(N, device=edge_index.device).repeat_interleave(E)
+            * self.num_genes
+        )
         batched_edge_index = edge_index.repeat(1, N) + offsets  # (2, N * E)
 
         # 3. GCNによる特徴伝播

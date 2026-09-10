@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """転移学習の配線確認用に、CNN部分のランダム初期重みを生成するスクリプト。
 
 生成物（既定で `pretrained_models/dummy_cnn_weights.pt`）は事前学習済み
@@ -13,6 +12,7 @@ resnet_baseline.py）の実行には不要。
 seedを固定しているため、同じPyTorch版・同じ引数であれば同じ重みが
 得られる。
 """
+
 import argparse
 import os
 
@@ -30,9 +30,12 @@ ARCHITECTURE = {
     "pc_dim": 200,
 }
 
+
 def create_dummy_weights(output_dir=DEFAULT_OUTPUT_DIR, seed=DEFAULT_SEED):
     """ランダム初期化したCNN部分のstate_dictを保存する。"""
-    print("擬似的な事前学習済み重みを作成中（ランダム初期重み。事前学習の成果ではない）...")
+    print(
+        "擬似的な事前学習済み重みを作成中（ランダム初期重み。事前学習の成果ではない）..."
+    )
     torch.manual_seed(seed)
 
     # モデルを一度初期化して、アーキテクチャを構築
@@ -49,15 +52,17 @@ def create_dummy_weights(output_dir=DEFAULT_OUTPUT_DIR, seed=DEFAULT_SEED):
 
     print(f"重みを {save_path} に保存しました（seed={seed}, {ARCHITECTURE}）。")
     print("保存されたレイヤー:")
-    for key in cnn_weights.keys():
+    for key in cnn_weights:
         print(f"- {key}")
     return save_path
+
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     return parser.parse_args(argv)
+
 
 if __name__ == "__main__":
     args = parse_args()
