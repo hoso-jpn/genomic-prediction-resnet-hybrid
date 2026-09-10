@@ -22,6 +22,7 @@ from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
 import external_logging
+import input_qc
 import run_manifest
 import soynam_data
 from external_logging import DEFAULT_WANDB_MODE, NullRunLogger, WandbRunLogger
@@ -287,10 +288,14 @@ def predict_gblup_fold(
     test_indices: IndexArray,
     genotypes: FloatArray,
     phenotypes: FloatArray,
+    *,
+    min_observed_rate: float = MIN_OBSERVED_RATE,
 ) -> tuple[FloatArray, GblupFit, FoldRelationships]:
     """Fit one leakage-safe LOFO split and predict held-out phenotypes."""
     fold_relationships = prepare_fold_relationships(
-        genotypes[train_indices], genotypes[test_indices]
+        genotypes[train_indices],
+        genotypes[test_indices],
+        min_observed_rate=min_observed_rate,
     )
     fit = fit_gblup_reml(
         fold_relationships.relationship_train,
@@ -387,6 +392,8 @@ def save_run_artifacts(
     expected_family_count: int = EXPECTED_FAMILY_COUNT,
     wandb_mode: str = DEFAULT_WANDB_MODE,
     command_arguments: Sequence[str] | None = None,
+    min_observed_rate: float = MIN_OBSERVED_RATE,
+    qc: input_qc.InputQc | None = None,
 ) -> Path:
     """Assemble this run's metadata/split/preprocessing/metrics and write them.
 
@@ -414,7 +421,7 @@ def save_run_artifacts(
         "schema_version": run_manifest.SCHEMA_VERSION,
         "model": "gblup",
         "config": {
-            "min_observed_rate": MIN_OBSERVED_RATE,
+            "min_observed_rate": min_observed_rate,
             "maf_threshold": MAF_THRESHOLD,
             "imputation": "training_mean",
             "relationship": "VanRaden-1",
@@ -448,13 +455,14 @@ def save_run_artifacts(
             ["numpy", "pandas", "scikit-learn", "scipy"]
         ),
         "hyperparameters": {
-            "min_observed_rate": MIN_OBSERVED_RATE,
+            "min_observed_rate": min_observed_rate,
             "maf_threshold": MAF_THRESHOLD,
             "relationship": "VanRaden-1",
             "expected_family_count": int(expected_family_count),
         },
         "external_logging": {"backend": "wandb", "mode": wandb_mode},
         "input_files": input_files,
+        "input_qc": qc.report if qc is not None else None,
         "families": families,
         "split_ref": "split.json",
         "preprocessing_ref": "preprocessing.json",
@@ -463,6 +471,8 @@ def save_run_artifacts(
         "predictions_ref": "predictions.csv",
     }
 
+    if qc is not None:
+        preprocessing_arrays = {**preprocessing_arrays, **qc.arrays}
     return run_manifest.write_run_artifacts(
         output_dir=output_dir,
         run_id=run_id,
@@ -515,7 +525,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     external_logging.add_wandb_mode_argument(parser)
+    input_qc.add_arguments(parser, marker_default=MIN_OBSERVED_RATE)
     args = parser.parse_args(argv)
+    if not 0 < args.min_marker_observed_rate < 1:
+        parser.error(
+            "GBLUP --min-marker-observed-rate must be in (0, 1); its filter is strict >"
+        )
     if args.expected_families < MIN_EXPECTED_FAMILY_COUNT:
         parser.error(
             "--expected-families must be at least "
@@ -541,11 +556,16 @@ def main(argv: Sequence[str] | None = None) -> None:
             Path(__file__),
             Path(external_logging.__file__),
             Path(soynam_data.__file__),
+            Path(input_qc.__file__),
             Path(run_manifest.__file__),
         ]
     )
 
-    dataset = load_soynam_dataset(data_dir, family_files=family_files)
+    qc = input_qc.apply_sample_qc(
+        load_soynam_dataset(data_dir, family_files=family_files),
+        args.max_sample_missing_rate,
+    )
+    dataset = qc.dataset
     splitter = LeaveOneGroupOut()
     total_folds = splitter.get_n_splits(
         dataset.genotypes, dataset.phenotypes, dataset.family_ids
@@ -566,7 +586,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "sample_count": dataset.phenotypes.size,
             "marker_count": dataset.genotypes.shape[1],
             "family_count": expected_folds,
-            "min_observed_rate": MIN_OBSERVED_RATE,
+            "min_observed_rate": args.min_marker_observed_rate,
             "maf_threshold": MAF_THRESHOLD,
             "relationship": "VanRaden-1",
             "phenotype_scale": "raw-kg-per-ha",
@@ -592,6 +612,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             test_indices,
             dataset.genotypes,
             dataset.phenotypes,
+            min_observed_rate=args.min_marker_observed_rate,
         )
         oof_predictions[test_indices] = predictions
         correlation = compute_pearson_correlation(
@@ -668,6 +689,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         expected_family_count=args.expected_families,
         wandb_mode=args.wandb_mode,
         command_arguments=command_arguments,
+        min_observed_rate=args.min_marker_observed_rate,
+        qc=qc,
     )
     print(f"run artifacts:             {run_dir}")
 
