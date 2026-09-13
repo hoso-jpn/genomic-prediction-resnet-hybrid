@@ -6,7 +6,6 @@ import argparse
 import json
 import shutil
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -15,54 +14,14 @@ import torch
 
 import gblup_baseline as gblup
 import gs_dataset
+import gs_scenarios
+import gs_selection
 import resnet_baseline as resnet
 import run_manifest
 
-
-def make_plan(dataset, config):
-    families = sorted(set(dataset.baseline.family_ids))
-    if len(families) < 3:
-        raise ValueError("at least three families are required for outer/inner LOFO")
-    folds = []
-    for index, family in enumerate(families):
-        train = np.flatnonzero(dataset.baseline.family_ids != family)
-        test = np.flatnonzero(dataset.baseline.family_ids == family)
-        validation = resnet.select_validation_family(
-            dataset.baseline.family_ids[train], index, config.seed
-        )
-        folds.append(
-            {
-                "train": dataset.baseline.sample_names[train].tolist(),
-                "test": dataset.baseline.sample_names[test].tolist(),
-                "validation_family": validation,
-            }
-        )
-    plan = {
-        "schema_version": 1,
-        "kind": "gs_lofo_plan",
-        "dataset_hash": dataset.provenance["dataset_hash"],
-        "preprocessing_fit_scope": "training_partition_only",
-        "phenotype_correction": "none",
-        "resnet_config": asdict(config),
-        "folds": folds,
-    }
-    plan["plan_hash"] = run_manifest.canonical_json_hash(plan)
-    return plan
-
-
-def validate_plan(dataset, plan):
-    try:
-        config = resnet.ResNetConfig(**plan["resnet_config"])
-        expected = make_plan(dataset, config)
-    except (KeyError, TypeError) as error:
-        raise ValueError("invalid GS split plan") from error
-    if expected != plan:
-        raise ValueError(
-            "GS split plan differs from data, configuration or canonical folds"
-        )
-    if config.max_epochs < 1 or config.patience < 1 or config.batch_size < 2:
-        raise ValueError("epochs/patience must be positive and batch_size >= 2")
-    return config
+# Public aliases preserve the initial generic input API.
+make_plan = gs_scenarios.make_plan
+validate_plan = gs_scenarios.validate_plan
 
 
 def write_json(path, payload):
@@ -81,6 +40,8 @@ def evaluate(dataset, plan, output_dir: Path):
         [
             Path(__file__),
             Path(gs_dataset.__file__),
+            Path(gs_scenarios.__file__),
+            Path(gs_selection.__file__),
             Path(gblup.__file__),
             Path(resnet.__file__),
             Path(resnet.model.__file__),
@@ -106,6 +67,10 @@ def evaluate(dataset, plan, output_dir: Path):
             fold_index,
             config,
             torch.device("cpu"),
+            inner_indices=(
+                np.array([ids[name] for name in fold["fit"]]),
+                np.array([ids[name] for name in fold["validation"]]),
+            ),
         )
         prefix = f"fold_{fold_index}"
         arrays.update(
@@ -116,6 +81,12 @@ def evaluate(dataset, plan, output_dir: Path):
                 + "_resnet_selection_mask": record.selection_transform.retained_markers,
                 prefix
                 + "_resnet_selection_means": record.selection_transform.marker_means,
+                prefix
+                + "_resnet_selection_scales": record.selection_transform.marker_scales,
+                prefix
+                + "_resnet_selection_pca_components": record.selection_transform.pca.components_,
+                prefix
+                + "_resnet_selection_pca_mean": record.selection_transform.pca.mean_,
                 prefix + "_resnet_final_mask": record.final_transform.retained_markers,
                 prefix + "_resnet_final_means": record.final_transform.marker_means,
                 prefix + "_resnet_scales": record.final_transform.marker_scales,
@@ -158,11 +129,26 @@ def evaluate(dataset, plan, output_dir: Path):
     predictions = pd.DataFrame(rows)
     if not np.isfinite(predictions.predicted).all():
         raise RuntimeError("nonfinite model predictions")
+    report = gs_selection.feasibility_report(predictions, dataset, plan)
     gs_dataset.verify_unchanged(dataset)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".gs-evaluation-", dir=output_dir.parent))
     try:
         write_json(temporary / "split.json", plan)
+        write_json(temporary / "feasibility.json", report)
+        (temporary / "feasibility.md").write_text(
+            "# GS feasibility review\n\nScenario: "
+            + plan["policy"]["scenario"]
+            + "\n\n"
+            + "\n".join(
+                f"- {model}: {result['decision']} ({result['reason']})"
+                for model, result in report["models"].items()
+            )
+            + "\n\nReal adzuki performance is unverified. See feasibility.json for metrics, "
+            "group uncertainty, applicable population, further trials and update review. "
+            "Observed selection differential is not future genetic gain.\n",
+            encoding="utf-8",
+        )
         write_json(
             temporary / "metadata.json",
             {
@@ -199,6 +185,9 @@ def main():
     parser.add_argument("--expected-assembly")
     parser.add_argument("--split", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--policy", type=Path, help="Predeclared scenario JSON (plan only)"
+    )
     parser.add_argument("--max-epochs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -207,7 +196,9 @@ def main():
     )
     if args.command == "plan":
         plan = make_plan(
-            dataset, resnet.ResNetConfig(max_epochs=args.max_epochs, seed=args.seed)
+            dataset,
+            resnet.ResNetConfig(max_epochs=args.max_epochs, seed=args.seed),
+            json.loads(args.policy.read_text()) if args.policy else None,
         )
         validate_plan(dataset, plan)
         write_json(args.split, plan)

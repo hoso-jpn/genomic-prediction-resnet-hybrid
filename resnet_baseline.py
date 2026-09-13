@@ -302,15 +302,33 @@ def predict_resnet_fold(
     fold_index: int,
     config: ResNetConfig,
     device: torch.device,
+    *,
+    inner_indices: tuple[NDArray[np.int_], NDArray[np.int_]] | None = None,
 ) -> tuple[FloatArray, ResnetFoldRecord]:
     """Select an epoch without test data, refit, and predict one held-out family."""
-    held_out_family = str(np.unique(family_ids[test_indices])[0])
-    validation_family = select_validation_family(
-        family_ids[train_indices], fold_index, config.seed
-    )
-    validation_mask = family_ids[train_indices] == validation_family
-    fit_indices = train_indices[~validation_mask]
-    validation_indices = train_indices[validation_mask]
+    held_out_family = ",".join(np.unique(family_ids[test_indices]))
+    if inner_indices is None:
+        validation_family = select_validation_family(
+            family_ids[train_indices], fold_index, config.seed
+        )
+        validation_mask = family_ids[train_indices] == validation_family
+        fit_indices = train_indices[~validation_mask]
+        validation_indices = train_indices[validation_mask]
+    else:
+        fit_indices, validation_indices = inner_indices
+        train_set, test_set = set(train_indices), set(test_indices)
+        fit_set, validation_set = set(fit_indices), set(validation_indices)
+        if (
+            not fit_set
+            or not validation_set
+            or fit_set & validation_set
+            or not fit_set | validation_set <= train_set
+            or (fit_set | validation_set) & test_set
+            or len(fit_set) != len(fit_indices)
+            or len(validation_set) != len(validation_indices)
+        ):
+            raise ValueError("invalid or overlapping inner partitions")
+        validation_family = ",".join(np.unique(family_ids[validation_indices]))
     fold_seed = config.seed + fold_index * 100
     best_epoch, selection_transform, selection_target_mean, selection_target_scale = (
         _select_epoch(

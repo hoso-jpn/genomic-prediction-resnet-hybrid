@@ -110,3 +110,72 @@ input path, not end-to-end large-panel support.
 This is an explicit correspondence, **not full MIAPPE validation or certification**.
 See [MIAPPE specifications](https://www.miappe.org/). Study identifiers, complete
 experimental design and ontology exports would require additional fields.
+
+## Deployment scenarios and selection diagnostics (#28)
+
+`gs_evaluate.py plan --policy policy.json ...` saves schema v2 partitions with
+explicit `train`, `test`, inner `fit` and `validation` observation IDs. `run`
+consumes these partitions for both baselines, including ResNet epoch selection.
+The plan hash covers policy, data identity, target definition, all partitions and
+model configuration. Reordering or adding a test ID to training invalidates it.
+
+Default `family_lofo` is preserved. The original SoyNAM `evaluation_split.py`
+contract is untouched. New plan policies:
+
+```json
+{
+  "scenario": "future_year", "selection_fraction": 0.25,
+  "test_year": 2026, "validation_year": 2025,
+  "genotype_status": "known", "environment_status": "known"
+}
+```
+
+All outer training years precede test; validation is the latest training year,
+and inner fit precedes validation. `known` requires every queried line/site to
+occur earlier; `new` requires disjoint lines/sites. The same constraint applies
+to inner selection. Thus known-line prediction may legitimately use that line's
+past observations, while new-line prediction rejects this overlap. Data after the
+test year and all other unused observations are explicitly excluded.
+
+```json
+{
+  "scenario": "family_environment", "selection_fraction": 0.25,
+  "test_families": ["F3"], "test_sites": ["C"],
+  "validation_families": ["F2"], "validation_sites": ["B"]
+}
+```
+
+Test contains the declared family/site intersection. Outer training excludes the
+**union** of held-out families and sites. Inner selection applies the same rule.
+Cross cells are recorded as exclusions, not quietly used for training. This
+models new families **and** new environments; it is not an additive G×E model.
+Generation holdout can be represented by an explicitly curated family/cohort
+partition; no unrecorded generation is inferred from a year or ID.
+
+`feasibility.json` and its Markdown summary carry scenario, population,
+Pearson/RMSE/Spearman, exact-k overlap and observed selected-mean minus overall
+mean. Direction is declared; a lower-is-better trait also reports a sign-adjusted
+differential. `k=ceil(n*fraction)`. Spearman uses average ranks; boundary ties
+for exact-k use ascending opaque observation IDs. Missing pairs are counted and
+excluded. Constant predictions/targets, fewer than two pairs, and all-missing
+inputs produce unavailable ranking metrics, not a spurious favorable score.
+
+**Selection unit is the observation**, explicitly, not an automatically averaged
+breeding line. Repeated measurements retain their IDs. For actual line selection,
+a trial-specific aggregation policy and fold-aware phenotype model are still
+required; this implementation does not silently average test replicates.
+
+Group bootstrap uses family for LOFO/family+environment and line for future-year
+prediction. It resamples whole groups including repetitions; fewer than three
+groups or too many undefined resamples yield no interval. The interval is
+conditional on the measured year/environments, not an uncertainty estimate for
+new environments, individual prediction intervals or future genetic gain.
+
+Reports return `no-go` for insufficient evaluable/group evidence and otherwise
+`conditional` pending independent trials and expert review. They never auto-assert
+Go, real adzuki performance or yield improvement. Go requires a separate pilot
+with prespecified acceptance criteria, available individual data and a confirmed
+application population. Review before each season/generation/population change;
+collect independent target-year/environment observations as the next trial.
+Different scenarios remain separate runs/reports and are not pooled into a
+cross-scenario superiority ranking. #6 remains the original SoyNAM experiment.
