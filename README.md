@@ -471,3 +471,6 @@ GS panelの読み込み容量上限・実測範囲は
 
 任意の連続形質を個体別GSパネルへ結び付ける入口とCPU評価コマンドは
 [gs-dataset-contract.md](docs/gs-dataset-contract.md) に記載しています。
+
+共通marker QC・ridge・PCA有無の比較は
+[controlled-comparison.md](docs/controlled-comparison.md) を参照してください。

@@ -31,6 +31,7 @@ SOURCES = [
     "soynam_data.py",
     "model.py",
     "gblup_baseline.py",
+    "controlled_qc.py",
     "resnet_baseline.py",
     "external_logging.py",
 ]
@@ -245,6 +246,7 @@ def audit_run(run_dir, name, seed, config, data, checksums, provenance):
         raise ValueError(f"{name}: input, split, model, or seed mismatch")
     required_sources = {
         f"{model}_baseline.py",
+        "controlled_qc.py",
         "soynam_data.py",
         "input_qc.py",
         "evaluation_split.py",

@@ -21,6 +21,7 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from sklearn.model_selection import LeaveOneGroupOut
 
+import controlled_qc
 import evaluation_split
 import external_logging
 import input_qc
@@ -79,6 +80,7 @@ def prepare_fold_relationships(
     *,
     min_observed_rate: float = MIN_OBSERVED_RATE,
     maf_threshold: float = MAF_THRESHOLD,
+    qc_mode: str = "legacy",
 ) -> FoldRelationships:
     """Build leakage-safe VanRaden matrices from training statistics only."""
     train = np.asarray(genotypes_train, dtype=np.float64)
@@ -99,34 +101,43 @@ def prepare_fold_relationships(
     if not 0.0 <= maf_threshold < 0.5:
         raise ValueError("maf_threshold must be in [0, 0.5)")
 
-    observed_counts = np.isfinite(train).sum(axis=0)
-    observed_rates_all = observed_counts / train.shape[0]
-    observed_mask = observed_rates_all > min_observed_rate
-    if not observed_mask.any():
-        raise ValueError("no markers pass the training observed-rate filter")
+    if qc_mode == "controlled":
+        retained_markers = controlled_qc.marker_mask(
+            train, min_observed_rate=min_observed_rate, maf_threshold=maf_threshold
+        )
+        marker_means = np.nanmean(train[:, retained_markers], axis=0)
+        observed_rates = np.isfinite(train[:, retained_markers]).mean(axis=0)
+    elif qc_mode == "legacy":
+        observed_counts = np.isfinite(train).sum(axis=0)
+        observed_rates_all = observed_counts / train.shape[0]
+        observed_mask = observed_rates_all > min_observed_rate
+        if not observed_mask.any():
+            raise ValueError("no markers pass the training observed-rate filter")
 
-    candidate_train = train[:, observed_mask]
-    candidate_means = np.nanmean(candidate_train, axis=0)
-    imputed_candidate_train = np.where(
-        np.isnan(candidate_train), candidate_means, candidate_train
-    )
-    candidate_variances = np.var(imputed_candidate_train, axis=0)
-    allele_frequencies = (candidate_means + 1.0) / 2.0
-    candidate_maf = np.minimum(allele_frequencies, 1.0 - allele_frequencies)
-    candidate_keep = (
-        np.isfinite(candidate_means)
-        & (candidate_variances > VARIANCE_THRESHOLD)
-        & (candidate_maf > maf_threshold)
-    )
-    if not candidate_keep.any():
-        raise ValueError("no markers pass the training variance and MAF filters")
+        candidate_train = train[:, observed_mask]
+        candidate_means = np.nanmean(candidate_train, axis=0)
+        imputed_candidate_train = np.where(
+            np.isnan(candidate_train), candidate_means, candidate_train
+        )
+        candidate_variances = np.var(imputed_candidate_train, axis=0)
+        allele_frequencies = (candidate_means + 1.0) / 2.0
+        candidate_maf = np.minimum(allele_frequencies, 1.0 - allele_frequencies)
+        candidate_keep = (
+            np.isfinite(candidate_means)
+            & (candidate_variances > VARIANCE_THRESHOLD)
+            & (candidate_maf > maf_threshold)
+        )
+        if not candidate_keep.any():
+            raise ValueError("no markers pass the training variance and MAF filters")
 
-    retained_markers = np.zeros(train.shape[1], dtype=bool)
-    retained_positions = np.flatnonzero(observed_mask)[candidate_keep]
-    retained_markers[retained_positions] = True
+        retained_markers = np.zeros(train.shape[1], dtype=bool)
+        retained_positions = np.flatnonzero(observed_mask)[candidate_keep]
+        retained_markers[retained_positions] = True
 
-    marker_means = candidate_means[candidate_keep]
-    observed_rates = observed_rates_all[retained_markers]
+        marker_means = candidate_means[candidate_keep]
+        observed_rates = observed_rates_all[retained_markers]
+    else:
+        raise ValueError("qc_mode must be legacy or controlled")
     retained_train = train[:, retained_markers]
     retained_test = test[:, retained_markers]
     imputed_train = np.where(np.isnan(retained_train), marker_means, retained_train)
@@ -292,12 +303,16 @@ def predict_gblup_fold(
     phenotypes: FloatArray,
     *,
     min_observed_rate: float = MIN_OBSERVED_RATE,
+    maf_threshold: float = MAF_THRESHOLD,
+    qc_mode: str = "legacy",
 ) -> tuple[FloatArray, GblupFit, FoldRelationships]:
     """Fit one leakage-safe LOFO split and predict held-out phenotypes."""
     fold_relationships = prepare_fold_relationships(
         genotypes[train_indices],
         genotypes[test_indices],
         min_observed_rate=min_observed_rate,
+        maf_threshold=maf_threshold,
+        qc_mode=qc_mode,
     )
     fit = fit_gblup_reml(
         fold_relationships.relationship_train,
@@ -562,6 +577,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     source_checksums = run_manifest.source_file_checksums(
         [
             Path(__file__),
+            Path(controlled_qc.__file__),
             Path(external_logging.__file__),
             Path(soynam_data.__file__),
             Path(input_qc.__file__),
