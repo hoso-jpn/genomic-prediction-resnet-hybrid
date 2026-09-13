@@ -468,3 +468,6 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 
 GS panelの読み込み容量上限・実測範囲は
 [panel-loader-scaling.md](docs/panel-loader-scaling.md) を参照してください。
+
+任意の連続形質を個体別GSパネルへ結び付ける入口とCPU評価コマンドは
+[gs-dataset-contract.md](docs/gs-dataset-contract.md) に記載しています。
