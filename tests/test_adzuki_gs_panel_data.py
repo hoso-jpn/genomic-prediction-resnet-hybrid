@@ -398,3 +398,45 @@ def test_real_producer_synthetic_output(cohort):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_budget_rejects_before_checksum_or_matrix_read(tmp_path, monkeypatch):
+    _write_panel(tmp_path)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("matrix/checksum read before budget rejection")
+
+    monkeypatch.setattr(gs_panel, "verify_checksums", unexpected)
+    monkeypatch.setattr(gs_panel, "_read_matrix", unexpected)
+    with pytest.raises(ValueError, match="memory budget"):
+        gs_panel.load_gs_panel(tmp_path, max_memory_bytes=1)
+
+
+def test_declared_shape_is_reconciled(tmp_path):
+    _write_panel(tmp_path, manifest_overrides={"matrix_shape": [3, 3]})
+    with pytest.raises(ValueError, match="matrix_shape"):
+        gs_panel.load_gs_panel(tmp_path)
+
+
+def test_bad_gzip_leaves_no_cache_and_retry_reads_input(tmp_path):
+    _write_panel(tmp_path)
+    path = tmp_path / f"{COHORT}{gs_panel.MATRIX_SUFFIX}"
+    path.write_bytes(path.read_bytes()[:-8])
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises((EOFError, OSError)):
+        gs_panel.load_gs_panel(tmp_path, verify_file_checksums=False)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    _write_panel(tmp_path)
+    panel = gs_panel.load_gs_panel(tmp_path)
+    assert panel.genotypes.flags.c_contiguous
+    assert panel.genotypes.dtype == np.float64
+    assert panel.genotypes.flags.owndata
+
+
+def test_matrix_shape_cannot_overrun_allocation(tmp_path):
+    _write_panel(tmp_path)
+    path = tmp_path / f"{COHORT}{gs_panel.MATRIX_SUFFIX}"
+    with gzip.open(path, "at") as handle:
+        handle.write("Chr1:300:A:G\t0\t0\t0\n")
+    with pytest.raises(ValueError, match="shape"):
+        gs_panel.load_gs_panel(tmp_path, verify_file_checksums=False)

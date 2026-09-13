@@ -13,8 +13,7 @@ writes four files per cohort:
 The dosage encoding (`-1` hom-ref, `0` het, `+1` hom-alt, `nan` missing)
 is the same additive scale as ``soynam_data.GENOTYPE_ENCODING``, and the
 matrix has the same on-disk orientation as ``soynam_data`` genotype files
-(marker/variant rows, sample columns), so this loader transposes after
-reading exactly as ``_load_genotype_frame`` does.
+(marker/variant rows, sample columns), so this loader writes each marker directly into the final sample-major array.
 
 Interpretation is taken from the manifest, not assumed: the manifest
 embeds the encoding contract, and anything this loader was not written
@@ -25,10 +24,10 @@ read under the wrong assumptions.
 
 from __future__ import annotations
 
+import csv
 import gzip
 import hashlib
 import json
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +51,7 @@ EXPECTED_MISSING_TOKEN = "nan"
 EXPECTED_PLOIDY = "diploid_only"
 EXPECTED_DOSAGES = {"0/0": -1.0, "0/1_or_1/0": 0.0, "1/1": 1.0}
 ALLOWED_DOSAGES = (-1.0, 0.0, 1.0)
+DEFAULT_MAX_MEMORY_BYTES = 512 * 1024**2
 
 VARIANT_KEY_COLUMN = "variant_key"
 SAMPLE_ID_COLUMN = "sample_id"
@@ -212,45 +212,80 @@ def verify_checksums(
             )
 
 
-def _read_matrix(path: Path) -> tuple[list[str], list[str], FloatArray]:
-    """Read the variant-rows-by-sample-columns matrix as written on disk."""
+@dataclass(frozen=True)
+class PanelLoadEstimate:
+    """Conservative planning estimate, not a guaranteed RSS upper bound."""
+
+    samples: int
+    markers: int
+    array_bytes: int
+    metadata_bytes: int
+    estimated_memory_bytes: int
+    temporary_disk_bytes: int = 0
+
+
+def estimate_panel_load(
+    sample_path: Path, variant_path: Path, *, max_memory_bytes: int
+) -> PanelLoadEstimate:
+    if type(max_memory_bytes) is not int or max_memory_bytes <= 0:
+        raise ValueError("max_memory_bytes must be a positive integer")
+    metadata_bytes = sample_path.stat().st_size + variant_path.stat().st_size
+    # pandas strings, ID arrays, duplicate sets and one parsed matrix row.
+    # Reject oversized metadata before building Python objects or opening gzip.
+    if 8 * metadata_bytes > max_memory_bytes:
+        raise ValueError("GS panel metadata exceeds memory budget before matrix read")
+    counts = []
+    for path in (sample_path, variant_path):
+        with path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle, delimiter="\t")
+            next(reader, None)
+            counts.append(sum(bool(row) for row in reader))
+    samples, markers = counts
+    array_bytes = samples * markers * np.dtype(np.float64).itemsize
+    estimated = array_bytes + 8 * metadata_bytes + 1024 * (samples + markers)
+    if estimated > max_memory_bytes:
+        raise ValueError(
+            f"GS panel estimated memory {estimated} bytes exceeds memory budget "
+            f"{max_memory_bytes} bytes (shape={samples}x{markers}); "
+            "use a smaller panel or explicitly raise max_memory_bytes"
+        )
+    return PanelLoadEstimate(samples, markers, array_bytes, metadata_bytes, estimated)
+
+
+def _read_matrix(
+    path: Path, *, expected_samples: int, expected_markers: int
+) -> tuple[list[str], list[str], FloatArray]:
+    """Parse one row at a time directly into the final C-contiguous array."""
     with gzip.open(path, mode="rt", encoding="utf-8", newline="") as handle:
         header = handle.readline().rstrip("\r\n").split("\t")
         if not header or header[0] != VARIANT_KEY_COLUMN:
-            raise ValueError(
-                f"matrix header must start with '{VARIANT_KEY_COLUMN}', "
-                f"found {header[:1]}"
-            )
+            raise ValueError(f"matrix header must start with '{VARIANT_KEY_COLUMN}'")
         sample_ids = header[1:]
         if not sample_ids:
-            # A zero-variant panel is a normal outcome; a zero-sample
-            # header is not, and the producer treats it as a hard error too.
             raise ValueError("matrix header lists no samples")
-
+        if len(sample_ids) != expected_samples:
+            raise ValueError("sample metadata does not match the matrix shape")
+        matrix = np.empty((expected_samples, expected_markers), dtype=np.float64)
         variant_keys: list[str] = []
-        rows: list[list[float]] = []
         for line_number, line in enumerate(handle, start=2):
             if not line.strip():
                 continue
             fields = line.rstrip("\r\n").split("\t")
-            if len(fields) != len(sample_ids) + 1:
+            if len(fields) != expected_samples + 1:
                 raise ValueError(
                     f"matrix line {line_number} has {len(fields) - 1} dosage "
-                    f"cells, expected {len(sample_ids)}"
+                    f"cells, expected {expected_samples}"
                 )
+            marker_index = len(variant_keys)
+            if marker_index >= expected_markers:
+                raise ValueError("variant metadata does not match the matrix shape")
             variant_keys.append(fields[0])
-            rows.append(
-                [
-                    _parse_dosage(token, variant_key=fields[0], sample_id=sample_id)
-                    for token, sample_id in zip(fields[1:], sample_ids)
-                ]
-            )
-
-    matrix = (
-        np.asarray(rows, dtype=np.float64)
-        if rows
-        else np.empty((0, len(sample_ids)), dtype=np.float64)
-    )
+            for sample_index, token in enumerate(fields[1:]):
+                matrix[sample_index, marker_index] = _parse_dosage(
+                    token, variant_key=fields[0], sample_id=sample_ids[sample_index]
+                )
+        if len(variant_keys) != expected_markers:
+            raise ValueError("variant metadata does not match the matrix shape")
     return sample_ids, variant_keys, matrix
 
 
@@ -278,10 +313,11 @@ def _parse_dosage(token: str, *, variant_key: str, sample_id: str) -> float:
 def _check_duplicates(values: list[str], *, kind: str) -> None:
     if any(not value.strip() for value in values):
         raise ValueError(f"empty {kind} in the GS panel")
-    counts = Counter(values)
-    duplicates = sorted(value for value, count in counts.items() if count > 1)
-    if duplicates:
-        raise ValueError(f"duplicate {kind} in the GS panel: {duplicates}")
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            raise ValueError(f"duplicate {kind} in the GS panel: {value!r}")
+        seen.add(value)
 
 
 def load_gs_panel(
@@ -289,6 +325,7 @@ def load_gs_panel(
     *,
     cohort_id: str | None = None,
     verify_file_checksums: bool = True,
+    max_memory_bytes: int = DEFAULT_MAX_MEMORY_BYTES,
 ) -> AdzukiGsPanel:
     """Load one cohort's GS panel into a sample-rows-by-variant-columns array.
 
@@ -312,6 +349,21 @@ def load_gs_panel(
         if not (panel_dir / name).is_file():
             raise FileNotFoundError(f"GS panel file not found: {panel_dir / name}")
 
+    estimate = estimate_panel_load(
+        panel_dir / sample_metadata_name,
+        panel_dir / variant_metadata_name,
+        max_memory_bytes=max_memory_bytes,
+    )
+    # Future manifests may declare shape. Never trust it without reconciliation.
+    if "matrix_shape" in manifest:
+        declared = manifest["matrix_shape"]
+        if (
+            not isinstance(declared, list)
+            or any(type(value) is not int for value in declared)
+            or declared != [estimate.markers, estimate.samples]
+        ):
+            raise ValueError("manifest matrix_shape does not match metadata")
+
     if verify_file_checksums:
         verify_checksums(
             panel_dir,
@@ -319,7 +371,11 @@ def load_gs_panel(
             [matrix_name, sample_metadata_name, variant_metadata_name],
         )
 
-    sample_ids, variant_keys, matrix = _read_matrix(panel_dir / matrix_name)
+    sample_ids, variant_keys, matrix = _read_matrix(
+        panel_dir / matrix_name,
+        expected_samples=estimate.samples,
+        expected_markers=estimate.markers,
+    )
     _check_duplicates(sample_ids, kind="sample IDs")
     _check_duplicates(variant_keys, kind="variant keys")
 
@@ -346,10 +402,9 @@ def load_gs_panel(
         kind="variant",
     )
 
-    # On disk the matrix is variant rows by sample columns; the in-memory
-    # convention (as in SoynamDataset) is sample rows by marker columns.
+    # Matrix is already sample-major: no full transpose copy is needed.
     return AdzukiGsPanel(
-        genotypes=np.ascontiguousarray(matrix.T),
+        genotypes=matrix,
         sample_ids=np.asarray(sample_ids, dtype=np.str_),
         variant_keys=np.asarray(variant_keys, dtype=np.str_),
         cohort_id=resolved_cohort,
