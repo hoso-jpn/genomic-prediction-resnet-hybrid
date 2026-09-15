@@ -8,7 +8,7 @@ Issue #13で整備したCUDA実行環境の状態を記録します。**実機�
 
 | 項目 | 状態（2026-09-15） | 2026-08-31からの変化 |
 |---|---|---|
-| 対象GPUホストの構成確認（読み取りのみ） | **実施済み**（§7.1） | 再計測。containerdの保存先と`/`の空き容量が変化 |
+| 対象GPUホストの構成確認（読み取りのみ） | **実施済み**（§7.1） | 再計測。containerdの実効rootを今回確認し、`/`の空き容量も回復 |
 | CUDAイメージ定義（`Dockerfile.cuda`）のbuild | **実施済み・成功**（§7.3） | 未実施 → 成功 |
 | GPU起動経路（`docker compose --profile gpu`） | **起動済み**（`config --quiet`・`build gpu-smoke`・`run --rm gpu-smoke`） | 未実施 → 成功 |
 | syntheticデータのGPU smoke（`tests/test_gpu_smoke.py`） | **GPU実機で成功**（`test_resnet_cuda_smoke` PASSED、skipではない） | 未実施 → 成功 |
@@ -41,7 +41,7 @@ CI（GitHub Actions）にGPU runnerはありません。CIの成功はCPU経路�
 
 ## 2. 対象GPUホストの実測値（seedcore-01、2026-08-31、読み取りのみ）
 
-> 2026-08-31時点の履歴です。2026-09-15の再計測値と差分は§7.1・§7.2を参照してください（containerdの保存先は`/data/containerd`に変わり、`/`の空きは130Gです）。本節の「実機実行の前に解決が必要な点」は2026-09-15時点では解消しています。
+> 2026-08-31時点の履歴です。2026-09-15の再計測値と記録上の差分は§7.1・§7.2を参照してください（現在のcontainerdの実効rootは`/data/containerd`、`/`の空きは130Gです）。本節の「実機実行の前に解決が必要な点」は2026-09-15時点では解消しています。
 
 過去の構成情報ではなく、当日にホストへ接続して読み取った値です。設定変更・サービス停止・GPUを使用する実行は行っていません。
 
@@ -268,7 +268,7 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 | Storage Driver | `overlayfs`（`driver-type: io.containerd.snapshotter.v1`） | 同じ |
 | `Docker Root Dir` | `/data/docker` | 同じ |
 | containerdの起動引数 | `/usr/bin/containerd`（`--root`指定なし）、プロセス開始 2026-09-12 09:29:44（ホスト時刻） | `--root`指定なし |
-| `/etc/containerd/config.toml` | 1行目に`root = "/data/containerd"`あり（ファイルのmtimeは2026-06-19 19:57:29 +0900と表示） | `root` / `state`の指定行なし |
+| `/etc/containerd/config.toml` | 1行目に`root = "/data/containerd"`あり（ファイルのmtimeは2026-06-19 19:57:29 +0900と表示） | 当時の記録では`root` / `state`の指定行なし。現行ファイルのmtimeと整合しないため、当時の確認が不完全だった可能性あり |
 | `containerd config dump` | `root = '/data/containerd'`、`state = '/run/containerd'` | 未取得 |
 | containerdのsystemd drop-in | `/etc/systemd/system/containerd.service.d/90-seedcore-data-mount.conf`が存在（内容は権限不足で**未確認**） | 未記録 |
 | containerdの実効root | **`/data/containerd`**（`/dev/nvme1n1p1`、`/data`にマウント）。`/var/lib/containerd`は存在しない | 既定の`/var/lib/containerd`（`/`）と判断 |
@@ -296,9 +296,9 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 
 **安全条件の判断**: GPUが見え（VRAM空き32,026 MiB）、containerdの実効rootが`/data/containerd`（空き1.8T）で、`/`にも130Gの空きがあるため、buildを実施しました。containerdの保存先が`/data`へ変わった経緯（2026-08-31時点で別作業として進行中だった移設との関係）は、本作業では確認していません。
 
-### 7.2 2026-08-31からの主な差分
+### 7.2 2026-08-31の記録との主な差分
 
-- **containerdの実効root**: 既定の`/var/lib/containerd`（`/`）→ `/data/containerd`（`/data`）。`/var/lib/containerd`は存在しなくなりました。
+- **containerdの実効root（記録上）**: 2026-08-31は既定の`/var/lib/containerd`（`/`）と推定し、2026-09-15は`/data/containerd`（`/data`）を`containerd config dump`で確認しました。現在の`/var/lib/containerd`は存在しません。ただし、現行`config.toml`のmtimeは2026-06-19で前回記録より古いため、実際の変更時期は断定できず、2026-08-31の確認が不完全だった可能性があります。
 - **`/`の空き容量**: 238 MiB（100%）→ 130G（25%）。`/data`の使用は115G → 1.7Tに増加。
 - **GPUの使用状況**: `llama-server`（6,412 MiB）が稼働 → compute processなし（80 MiB使用）。
 - **ソフトウェア**: OS 24.04.4 → 24.04.5、kernel 6.8.0-136 → 6.8.0-139、Docker 29.7.2 → 29.8.0。driver（595.84）・NVIDIA Container Toolkit（1.20.0-1）は変化なし。
