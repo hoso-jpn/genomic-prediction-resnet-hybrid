@@ -2,7 +2,26 @@
 
 Issue #13で整備したCUDA実行環境の状態を記録します。**実機での確認が済んでいない項目は「未実施」と明記し、実施済みとして扱いません。**
 
-## 1. 現在の状態（2026-08-31時点）
+## 0. 現在の状態（2026-09-15時点、GPU実機検証後）
+
+2026-09-15に対象GPUホスト（seedcore-01）でCUDAイメージのbuildとsynthetic GPU smokeを実行し、成功しました。実測値・コマンド・結果は§7に記録しています。§1〜§6の2026-08-31時点の記録は、当時の状態を示す履歴として変更せずに残しています。
+
+| 項目 | 状態（2026-09-15） | 2026-08-31からの変化 |
+|---|---|---|
+| 対象GPUホストの構成確認（読み取りのみ） | **実施済み**（§7.1） | 再計測。containerdの実効rootを今回確認し、`/`の空き容量も回復 |
+| CUDAイメージ定義（`Dockerfile.cuda`）のbuild | **実施済み・成功**（§7.3） | 未実施 → 成功 |
+| GPU起動経路（`docker compose --profile gpu`） | **起動済み**（`config --quiet`・`build gpu-smoke`・`run --rm gpu-smoke`） | 未実施 → 成功 |
+| syntheticデータのGPU smoke（`tests/test_gpu_smoke.py`） | **GPU実機で成功**（`test_resnet_cuda_smoke` PASSED、skipではない） | 未実施 → 成功 |
+| GPU上でのforward/backward・3家系LOFO完走・OOF/run artifacts保存 | **実施済み**（§7.4、§7.5） | 未実施 → 成功 |
+| 実際に選択されたdeviceの記録 | **実機で確認**（`device_requested=cuda` / `device_resolved=cuda`） | 未実施 → 確認 |
+| CUDA要求時の明確な失敗（GPU不在） | CPU環境でのみ確認済み（GPUホストでは対象テストが仕様どおりskip） | 変化なし |
+| GPUと互換性の無いビルドでの失敗（実機） | **未実施** | 変化なし |
+| ホスト上の非Docker経路（`uv run --project cuda`） | **未実施**（ホストにuv未導入） | 変化なし |
+| 実データでの本実験（#6） | **未実施**（本Issueの対象外） | 変化なし |
+
+CI（GitHub Actions）にGPU runnerはありません。§7の成功はGPUホストでの手動実行によるもので、CIの結果ではありません。
+
+## 1. 過去の状態（2026-08-31時点、履歴として保持）
 
 | 項目 | 状態 |
 |---|---|
@@ -21,6 +40,8 @@ Issue #13で整備したCUDA実行環境の状態を記録します。**実機�
 CI（GitHub Actions）にGPU runnerはありません。CIの成功はCPU経路の確認であり、GPU経路の確認ではありません。
 
 ## 2. 対象GPUホストの実測値（seedcore-01、2026-08-31、読み取りのみ）
+
+> 2026-08-31時点の履歴です。2026-09-15の再計測値と記録上の差分は§7.1・§7.2を参照してください（現在のcontainerdの実効rootは`/data/containerd`、`/`の空きは130Gです）。本節の「実機実行の前に解決が必要な点」は2026-09-15時点では解消しています。
 
 過去の構成情報ではなく、当日にホストへ接続して読み取った値です。設定変更・サービス停止・GPUを使用する実行は行っていません。
 
@@ -201,6 +222,8 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 
 ### 5.2 未実施（GPU実機）
 
+> 2026-08-31時点の表です。build・smoke・forward/backward・LOFO完走・run artifacts保存は2026-09-15に実施し成功しました（§7）。
+
 | 項目 | 状態 |
 |---|---|
 | `docker compose --profile gpu build gpu-smoke` | 未実施（`/`が100%使用・空き238 MiB。containerd移設という別作業の状態確認と空き容量の確保が先。§2参照） |
@@ -217,8 +240,157 @@ GPRH_ENVIRONMENT=cuda-13.0-torch-2.12.1 \
 
 ## 6. 既知の未解決事項
 
-- 実機でのGPU実行は未実施です。§2のディスク空き容量を確保したうえで、まずGPU smoke（synthetic・小規模）から実施してください。ディスクの内訳のうち約127 GiBは権限の都合で未確定です（§2の確認コマンドを参照）。
+- synthetic GPU smokeは2026-09-15に実機で成功しました（§7）。実データのGPU本実験は未実施です（#6）。GPUと互換性の無いビルドでの実機失敗、ホスト上の非Docker経路は未実施です（§7.7）。
+- コンテナ内で作成された`metadata.json`の`git_commit`は`null`です（`.dockerignore`が`.git/`を除外するため）。GPU実行の証跡では、build元checkoutのcommit（§7.3）を別途記録してください。
+- `metadata.json`の`cuda_driver_api_version`は、2026-09-15のGPU実機実行でも`null`でした（`nvidia_driver_version`は`595.84`を記録）。同じイメージ内で確認したところ、`resnet_baseline.py`が参照する`torch._C._cuda_getDriverVersion`はtorch 2.12.1+cu130に存在せず（`getattr`の結果が`None`）、実装どおり`null`が記録されています。driver版の証跡は`nvidia_driver_version`と§7.1の`nvidia-smi`を使ってください。
 - `nvidia-smi`が表示するCUDA版（実機では13.2）は、driverが対応する最大のCUDA版です。コンテナ／venv内で実際に使われるCUDA runtimeの版（`torch.version.cuda` = 13.0）とは別物であり、両者を同一視しないでください。
 - **ベースイメージの変更はホスト側の制約を解消しません。** `Dockerfile.cuda`が`python:3.11-slim`を使うのは、CPUイメージと基盤を揃えて依存差を減らすためです。CUDA runtime / cuDNNは`cuda/uv.lock`が固定するwheelが提供します。ホストのdriverが要件（cu130なら`>= 580.65.06`）未満の場合や、GPUのarchitectureが採用したPyTorchビルドの対象外（例: sm_120非対応のビルド）である場合は、`nvidia/cuda`系のベースイメージへ変更しても解決しません。必要なのはdriverの更新、またはGPUに対応したPyTorch/CUDAの組合せへの変更です。
 - GPU実行時の数値はCPU実行と完全一致しません（cuDNNのアルゴリズム選択・非決定的なreduction）。#6の比較では、同一splitと同一の評価尺度を使ったうえで、この差を制約として明記してください。
 - 既定のCPUイメージ（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchが異なります。CPU/GPU比較を行う場合は§3のトレードオフに従い、同一イメージでの実行を使うか、差を明記してください。
+
+## 7. GPU実機検証（seedcore-01、2026-09-15）
+
+作業端末（a5-pro、NVIDIA GPUなし）からSSHで対象GPUホストへ接続し、ホスト上で実行しました。事前計測は読み取りのみです。削除・prune・containerd移設・Docker設定変更・サービス停止・driver更新は行っていません。GPU上の既存プロセスは停止していません（計測時点でcompute processは存在せず、§7.1）。使用したのはsyntheticデータのみで、実データ・非公開データは使っていません。
+
+### 7.1 事前計測（2026-09-15T14:01:28Z〜14:02:42Z、読み取りのみ）
+
+| 項目 | 実測値（2026-09-15） | 2026-08-31（§2） |
+|---|---|---|
+| hostname | `seedcore-01` | seedcore-01 |
+| OS / kernel | Ubuntu 24.04.5 LTS / `6.8.0-139-generic` | 24.04.4 LTS / 6.8.0-136-generic |
+| GPU / compute capability | NVIDIA GeForce RTX 5090（1基）/ 12.0 | 同じ |
+| NVIDIA driver / `nvidia-smi`のCUDA表示 | 595.84 / 13.2 | 同じ |
+| VRAM（`nvidia-smi --query-gpu`） | 32,607 MiB 中 **80 MiB 使用・32,026 MiB 空き**、GPU使用率 0% | 6,579 MiB 使用・25,527 MiB 空き、4% |
+| GPU上のプロセス | `Xorg` 44 MiB・`gnome-shell` 11 MiB（いずれもType G）。compute processなし。`pgrep llama-server`は該当なし | `llama-server` 6,412 MiB |
+| Docker（client / server） | 29.8.0 / 29.8.0、Compose v5.5.1 | 29.7.2（Composeは未記録） |
+| Runtimes / Default Runtime | `runc io.containerd.runc.v2 nvidia` / `runc` | `nvidia`登録済み / `runc` |
+| NVIDIA Container Toolkit | `nvidia-ctk` 1.20.0、`nvidia-container-toolkit` 1.20.0-1 | 1.20.0-1 |
+| Storage Driver | `overlayfs`（`driver-type: io.containerd.snapshotter.v1`） | 同じ |
+| `Docker Root Dir` | `/data/docker` | 同じ |
+| containerdの起動引数 | `/usr/bin/containerd`（`--root`指定なし）、プロセス開始 2026-09-12 09:29:44（ホスト時刻） | `--root`指定なし |
+| `/etc/containerd/config.toml` | 1行目に`root = "/data/containerd"`あり（ファイルのmtimeは2026-06-19 19:57:29 +0900と表示） | 当時の記録では`root` / `state`の指定行なし。現行ファイルのmtimeと整合しないため、当時の確認が不完全だった可能性あり |
+| `containerd config dump` | `root = '/data/containerd'`、`state = '/run/containerd'` | 未取得 |
+| containerdのsystemd drop-in | `/etc/systemd/system/containerd.service.d/90-seedcore-data-mount.conf`が存在（内容は権限不足で**未確認**） | 未記録 |
+| containerdの実効root | **`/data/containerd`**（`/dev/nvme1n1p1`、`/data`にマウント）。`/var/lib/containerd`は存在しない | 既定の`/var/lib/containerd`（`/`）と判断 |
+| `docker` / `containerd`サービス | active / active | active / active |
+| ホストのPython / uv / git | 3.12.3 / uvなし / 2.43.0 | 3.12.3 / uvなし / 未記録 |
+
+`df -h / /home /data`:
+
+| マウント | デバイス | 容量 | 使用 | 空き | 使用率 | 2026-08-31 |
+|---|---|---:|---:|---:|---:|---|
+| `/` | `/dev/nvme0n1p2` | 183G | 44G | **130G** | 25% | 使用173G・空き238M・100% |
+| `/home` | `/dev/nvme0n1p3` | 3.5T | 883G | 2.4T | 27% | 使用880G・空き2.4T・27% |
+| `/data` | `/dev/nvme1n1p1` | 3.6T | 1.7T | 1.8T | 48% | 使用115G・空き3.3T・4% |
+
+`df -i`: `/` 3%（2026-08-31は12%）、`/home` 1%、`/data` 1%。
+
+`docker system df`（build前）:
+
+| 種別 | 総数 | 使用中 | サイズ | 解放可能（docker表示） | 2026-08-31 |
+|---|---:|---:|---:|---:|---|
+| Images | 28 | 15 | 109.2GB | 25.71GB (23%) | 30 / 16 / 115.5 GB / 21.5 GB |
+| Containers | 21 | 13 | 1.429GB | 608.8MB (42%) | 23 / 0 / 1.65 GB / 1.65 GB |
+| Local Volumes | 3 | 3 | 1.118GB | 0B | 3 / 3 / 1.121 GB / 0 B |
+| Build Cache | 34 | 0 | 35.01GB | 1.48GB | 34 / 0 / 35.01 GB / 215.3 MB |
+
+**安全条件の判断**: GPUが見え（VRAM空き32,026 MiB）、containerdの実効rootが`/data/containerd`（空き1.8T）で、`/`にも130Gの空きがあるため、buildを実施しました。containerdの保存先が`/data`へ変わった経緯（2026-08-31時点で別作業として進行中だった移設との関係）は、本作業では確認していません。
+
+### 7.2 2026-08-31の記録との主な差分
+
+- **containerdの実効root（記録上）**: 2026-08-31は既定の`/var/lib/containerd`（`/`）と推定し、2026-09-15は`/data/containerd`（`/data`）を`containerd config dump`で確認しました。現在の`/var/lib/containerd`は存在しません。ただし、現行`config.toml`のmtimeは2026-06-19で前回記録より古いため、実際の変更時期は断定できず、2026-08-31の確認が不完全だった可能性があります。
+- **`/`の空き容量**: 238 MiB（100%）→ 130G（25%）。`/data`の使用は115G → 1.7Tに増加。
+- **GPUの使用状況**: `llama-server`（6,412 MiB）が稼働 → compute processなし（80 MiB使用）。
+- **ソフトウェア**: OS 24.04.4 → 24.04.5、kernel 6.8.0-136 → 6.8.0-139、Docker 29.7.2 → 29.8.0。driver（595.84）・NVIDIA Container Toolkit（1.20.0-1）は変化なし。
+
+### 7.3 実行コマンドと結果
+
+ホスト上に新規ディレクトリ`~/gprh-issue13-verify/`を作成し、公開リポジトリをcloneしてmainの`f732e4badaed4bfb63c2df217ebe3f4519d93b08`をcheckoutしました（`git status --short`は0行）。`cuda/uv.lock`のsha256は`ae3efbecd0517e1528dd85cfbadd1f30ae8ec881da6f8a9570fcf59c9c110de1`です。
+
+| 日時(UTC) | コマンド（checkout直下） | 結果 |
+|---|---|---|
+| 2026-09-15T14:02:42Z | `docker compose --profile gpu config --quiet` | 成功（exit 0） |
+| 2026-09-15T14:02:53Z〜14:04:50Z | `docker compose --profile gpu build --progress plain gpu-smoke` | 成功（exit 0）。全stepが`CACHED`なしで実行、`uv sync --frozen`で74 packagesを導入 |
+| 2026-09-15T14:04:59Z〜14:05:08Z | `docker compose --profile gpu run --rm gpu-smoke` | **成功（exit 0）: `1 passed, 1 skipped in 7.27s`** |
+
+build結果:
+
+| 項目 | 値 |
+|---|---|
+| イメージ | `genomic-prediction-resnet-hybrid-gpu-smoke:latest` |
+| image ID | `sha256:6cbde95a85adb5973c7fec253e544baa439f0c9104e10b3ffa60660595101c36`（8.38GB） |
+| ベースイメージ | `python:3.11-slim@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534` |
+| uv | `ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc` |
+| build元commit | `f732e4badaed4bfb63c2df217ebe3f4519d93b08`（コンテナ内には`.git`が無く、`metadata.json`の`git_commit`は`null`） |
+
+### 7.4 コンテナ内の環境（2026-09-15T14:05:26Z）
+
+同じイメージで`docker compose --profile gpu run --rm gpu-smoke python -c ...`を実行して取得しました。
+
+| 項目 | 値 |
+|---|---|
+| torch | `2.12.1+cu130` |
+| `torch.version.cuda` | `13.0` |
+| cuDNN（`torch.backends.cudnn.version()`） | `92000`（9.20.0）、`is_available()` = True |
+| `torch.cuda.is_available()` / device数 | True / 1 |
+| GPU名 / compute capability | `NVIDIA GeForce RTX 5090` / `(12, 0)` |
+| `torch.cuda.get_arch_list()` | `sm_75 sm_80 sm_86 sm_90 sm_100 sm_120` |
+| PyG / numpy / Python | 2.7.0 / 1.26.4 / 3.11.16 |
+| `GPRH_ENVIRONMENT` / `GPRH_REQUIRE_CUDA` | `cuda-13.0-torch-2.12.1` / `1` |
+| 最小のautograd確認（CUDA tensorの行列積→`backward()`） | 勾配のdevice = `cuda:0` |
+
+### 7.5 smokeの内訳とrun artifacts
+
+`gpu-smoke`の既定コマンド（`pytest -q`）はテストごとの内訳を表示せず、OOF・artifactsはコンテナ内の一時ディレクトリに作られて`--rm`で消えます。そのため、同じイメージで詳細表示と成果物の保持を追加して再実行しました。
+
+| 日時(UTC) | コマンド | 結果 |
+|---|---|---|
+| 2026-09-15T14:05:30Z | `docker compose --profile gpu run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v ~/gprh-issue13-verify/smoke-out:/out gpu-smoke pytest -v -rA -p no:cacheprovider tests/test_gpu_smoke.py --basetemp=/out/pytest` | **失敗（1 failed, 1 skipped）**。原因は検証用に追加した`--user`指定: コンテナにUID 1000の`passwd`エントリが無く、torch import時の`getpass.getuser()`が`KeyError: 'getpwuid(): uid not found: 1000'`で終了。文書化された`gpu-smoke`経路（root実行）では発生しない |
+| 2026-09-15T14:05:49Z〜14:05:57Z | 上記に`-e USER=gprh -e LOGNAME=gprh`を追加し、`--basetemp=/out/pytest-run2` | **成功（exit 0）: `1 passed, 1 skipped in 6.72s`** |
+
+テストの内訳（2回目の詳細実行）:
+
+- `tests/test_gpu_smoke.py::test_resnet_cuda_smoke` **PASSED**
+- `tests/test_gpu_smoke.py::test_cuda_request_fails_when_cuda_is_unavailable` SKIPPED（`requires a machine without CUDA`。GPUが見えるホストでは仕様どおりskip）
+
+`test_resnet_cuda_smoke`は、synthetic 3家系を`resnet_baseline.py --device cuda --max-epochs 1 --batch-size 4`で学習し（学習ループは`resnet_baseline.py`の`loss.backward()` / `optimizer.step()`）、OOFの列・行数・家系・有限値、run artifactsの必須ファイル、`metadata.json`のdevice記録、3 foldの`metrics.json`を検査します。保持した成果物を直接確認した結果:
+
+| 項目 | 値 |
+|---|---|
+| run_id | `20260915T140556Z-947db6c5` |
+| `oof_predictions.csv` | 18行（`Founder1_NAM01` / `Founder2_NAM02` / `Founder3_NAM03` 各6行）、列 `family_id,sample_name,observed_yield_kg_ha,predicted_yield_kg_ha` |
+| run artifacts | `metadata.json` / `metrics.json` / `predictions.csv` / `preprocessing.json` / `preprocessing_arrays.npz` / `split.json` |
+| `metrics.json`のfold | 3 fold（held-out: Founder1_NAM01, Founder2_NAM02, Founder3_NAM03）。synthetic 1 epochの値であり、精度の評価には使えません |
+| `device_requested` / `device_resolved` | `cuda` / `cuda` |
+| `cuda_version` / `cudnn_version` | `13.0` / `92000` |
+| `gpu_name` / `gpu_compute_capability` | `NVIDIA GeForce RTX 5090` / `12.0` |
+| `nvidia_driver_version` / `cuda_driver_api_version` | `595.84` / `null`（§6） |
+| `environment_label` | `cuda-13.0-torch-2.12.1` |
+| `library_versions` | numpy 1.26.4 / pandas 3.0.3 / scikit-learn 1.8.0 / torch 2.12.1+cu130 / torch-geometric 2.7.0 |
+| `measurements`（PyTorch allocatorのみ） | `cuda_peak_allocated_bytes` 70,627,840 / `cuda_peak_reserved_bytes` 71,303,168 |
+
+§5.2の形式での記録:
+
+```text
+2026-09-15T14:04:59Z | docker compose --profile gpu run --rm gpu-smoke | NVIDIA GeForce RTX 5090 (12.0) / 595.84 / torch.version.cuda 13.0, cuDNN 9.20.0 | image sha256:6cbde95a85ad…, commit f732e4b, cuda/uv.lock sha256 ae3efbec… | 1 passed, 1 skipped (exit 0) | run_idは一時ディレクトリで未保持
+2026-09-15T14:05:49Z | 同上 + pytest -v -rA --basetemp（成果物保持） | 同上 | 同上 | 1 passed, 1 skipped (exit 0) | 20260915T140556Z-947db6c5
+```
+
+### 7.6 実行後の状態（2026-09-15T14:06:18Z、読み取りのみ）
+
+| 項目 | 値 |
+|---|---|
+| VRAM / GPU使用率 | 80 MiB / 0%（実行前と同じ） |
+| `df -h /` / `/data` | 空き130G（25%） / 空き1.8T（48%）（`df -h`の表示上は実行前と同じ） |
+| 稼働中コンテナ数 | 13（実行前と同じ。`gpu-smoke`のコンテナは`--rm`で残っていない） |
+| `docker system df` | Images 29 / 15 / 117.6GB / 34.09GB、Build Cache 48 / 0 / 43.47GB / 1.557GB |
+
+ホスト上に残したもの（削除していません）: イメージ`genomic-prediction-resnet-hybrid-gpu-smoke:latest`、そのbuild cache、network `genomic-prediction-resnet-hybrid_default`（`compose run --rm`はnetworkを削除しない）、`~/gprh-issue13-verify/`（clone・`build.log`・syntheticの成果物、計7.4M。`smoke-out/`内のファイルはUID 1000所有）。
+
+### 7.7 未実施・未確認
+
+- GPUと互換性の無いビルド（例: sm_120非対応のtorch）での実機の失敗挙動: 未実施。
+- GPU不在時の明確な失敗: CPU環境でのみ確認（§1）。GPUホストでは対象テストがskipのため再確認していません。
+- ホスト上の非Docker経路（`uv sync --project cuda`）: 未実施（ホストにuv未導入）。
+- containerd drop-in（`90-seedcore-data-mount.conf`）の内容: 権限不足で未確認。
+- 実データのGPU本実験・精度・計算コスト比較: 未実施（#6、本Issueの対象外）。
