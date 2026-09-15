@@ -88,11 +88,26 @@ def fit_final(dataset, evaluation_dir: Path, output_dir: Path, *, scope):
     plan = json.loads(evidence_paths[0].read_text())
     config = gs_evaluate.validate_plan(dataset, plan)
     evaluation = json.loads(evidence_paths[1].read_text())
+    artifact_hashes = {
+        p.name: evidence_hashes[p.name]
+        for p in evidence_paths
+        if p.name != "metadata.json"
+    }
+    expected_comparison = (
+        "controlled_common_qc"
+        if config.qc_mode == "controlled"
+        else "pipeline_vs_pipeline; model-specific QC"
+    )
     if (
         evaluation.get("kind") != "held_out_evaluation"
         or evaluation.get("provenance") != dataset.provenance
+        or evaluation.get("plan_hash") != plan["plan_hash"]
+        or evaluation.get("artifact_checksums") != artifact_hashes
+        or evaluation.get("comparison") != expected_comparison
     ):
-        raise ValueError("evaluation metadata does not match training dataset")
+        raise ValueError(
+            "evaluation metadata/artifact binding does not match the training dataset and plan"
+        )
     controlled = config.qc_mode == "controlled"
     kwargs = {
         "qc_mode": config.qc_mode,

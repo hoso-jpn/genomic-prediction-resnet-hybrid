@@ -90,6 +90,28 @@ def test_serialization_matches_direct_gblup(fitted):
     assert not loaded.metadata["model_card"]["fit_final_is_oof"]
 
 
+def test_fit_final_rejects_a_split_from_another_evaluation(fitted, tmp_path):
+    dataset, evaluation, _, bundle = fitted
+    other_plan = gs_evaluate.make_plan(
+        dataset,
+        resnet.ResNetConfig(
+            qc_mode="legacy",
+            max_epochs=1,
+            hidden_dim=4,
+            num_blocks=1,
+            pca_components=2,
+        ),
+    )
+    (evaluation / "split.json").write_text(json.dumps(other_plan))
+    with pytest.raises(ValueError, match="metadata/artifact binding"):
+        bundles.fit_final(
+            dataset,
+            evaluation,
+            tmp_path / "mixed-evidence-model",
+            scope=bundle.metadata["model_card"]["scope"],
+        )
+
+
 def test_offline_new_individuals_need_no_phenotypes_or_training_files(
     fitted, monkeypatch
 ):

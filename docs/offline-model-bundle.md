@@ -39,7 +39,11 @@ uv run --frozen python gs_model_bundle.py fit-final \
 
 The evaluation split, metadata, predictions, feasibility report and preprocessing
 artifacts must exist. Dataset identity and canonical plan/configuration are
-verified. Their checksums are stored and checked again after fitting. The full
+verified. Evaluation metadata binds the exact plan hash and the checksums of the
+split, predictions, feasibility JSON and preprocessing archive, so artifacts from
+different runs cannot be mixed accidentally. Evaluations created before this
+binding was added must be regenerated. Their checksums are stored and checked
+again after fitting. The full
 supplied training observation set is then fitted with the chosen GBLUP QC;
 training-mean imputation, marker selection, allele frequency/VanRaden scale and
 REML are computed once. Repeated observations retain the explicitly supplied
