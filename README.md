@@ -474,3 +474,6 @@ GS panelの読み込み容量上限・実測範囲は
 
 共通marker QC・ridge・PCA有無の比較は
 [controlled-comparison.md](docs/controlled-comparison.md) を参照してください。
+
+GBLUPのfit-final・表現型不要のoffline予測は
+[offline-model-bundle.md](docs/offline-model-bundle.md) を参照してください。

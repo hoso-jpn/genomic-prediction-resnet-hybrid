@@ -243,11 +243,24 @@ def _evaluate(dataset, plan, output_dir: Path):
             "Observed selection differential is not future genetic gain.\n",
             encoding="utf-8",
         )
+        np.savez_compressed(temporary / "preprocessing.npz", **arrays)
+        predictions.to_csv(temporary / "predictions.csv", index=False)
+        bound_artifacts = (
+            "split.json",
+            "feasibility.json",
+            "preprocessing.npz",
+            "predictions.csv",
+        )
         write_json(
             temporary / "metadata.json",
             {
                 "schema_version": 1,
                 "kind": "held_out_evaluation",
+                "plan_hash": plan["plan_hash"],
+                "artifact_checksums": {
+                    name: run_manifest.sha256_file(temporary / name)
+                    for name in bound_artifacts
+                },
                 "provenance": dataset.provenance,
                 "manifest": dataset.manifest,
                 "excluded_samples_no_phenotype": list(dataset.excluded_samples),
@@ -272,8 +285,6 @@ def _evaluate(dataset, plan, output_dir: Path):
                 "folds": records,
             },
         )
-        np.savez_compressed(temporary / "preprocessing.npz", **arrays)
-        predictions.to_csv(temporary / "predictions.csv", index=False)
         temporary.rename(output_dir)
     finally:
         if temporary.exists():
