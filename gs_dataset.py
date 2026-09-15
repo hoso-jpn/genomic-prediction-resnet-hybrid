@@ -218,6 +218,20 @@ def load_dataset(
     if not observations.year.str.fullmatch(r"[0-9]{4}").all():
         raise ValueError("year must be a four-digit year")
     observations["year"] = observations.year.astype(int)
+    observation_lines = observations.merge(
+        metadata[["sample_id", "line_id"]],
+        on="sample_id",
+        how="left",
+        validate="many_to_one",
+        sort=False,
+    )
+    # The biological observation key must be unique before missing values are
+    # excluded. Otherwise two tissue samples for one line/plot/replicate could
+    # be silently accepted merely because one of the duplicate values is NA.
+    if observation_lines.duplicated(
+        ["line_id", "trait", "year", "site", "replicate"]
+    ).any():
+        raise ValueError("duplicate line observation key")
     missing = observations.value.isin(["", "NA", "nan"])
     values = pd.to_numeric(observations.value.mask(missing), errors="raise").to_numpy(
         dtype=float
@@ -230,10 +244,6 @@ def load_dataset(
     observations = observations.merge(
         metadata, on="sample_id", how="left", validate="many_to_one", sort=False
     )
-    # Each biological line/plot/replicate is a single observation even when
-    # two tissue sample IDs happen to refer to that same line.
-    if observations.duplicated(["line_id", "trait", "year", "site", "replicate"]).any():
-        raise ValueError("duplicate line observation key")
     if observations.shape[0] * panel.genotypes.shape[1] * 8 * 4 > max_memory_bytes:
         raise ValueError("expanded observation matrix exceeds training input budget")
     positions = {sample: i for i, sample in enumerate(panel.sample_ids)}

@@ -181,6 +181,22 @@ def test_duplicate_measurement_key_rejected(individual_dataset):
         gs_dataset.load_dataset(individual_dataset)
 
 
+def test_duplicate_line_key_is_rejected_before_missing_value_exclusion(
+    individual_dataset,
+):
+    samples_path = individual_dataset.parent / "samples.tsv"
+    samples = pd.read_csv(samples_path, sep="\t", dtype=str)
+    samples.loc[1, "line_id"] = samples.loc[0, "line_id"]
+    samples.to_csv(samples_path, sep="\t", index=False)
+    phenotypes_path = individual_dataset.parent / "phenotypes.tsv"
+    phenotypes = pd.read_csv(phenotypes_path, sep="\t", dtype=str)
+    phenotypes.loc[1, "value"] = "NA"
+    phenotypes.to_csv(phenotypes_path, sep="\t", index=False)
+    refresh_checksums(individual_dataset)
+    with pytest.raises(ValueError, match="duplicate line observation key"):
+        gs_dataset.load_dataset(individual_dataset)
+
+
 def test_allele_metadata_must_agree_with_key(individual_dataset):
     path = individual_dataset.parent / "panel/cohort.gs_panel.variant_metadata.tsv"
     frame = pd.read_csv(path, sep="\t", dtype=str)
