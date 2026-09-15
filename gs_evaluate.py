@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 
+import controlled_qc
 import gblup_baseline as gblup
 import gs_dataset
 import gs_scenarios
@@ -31,6 +35,40 @@ def write_json(path, payload):
 
 
 def evaluate(dataset, plan, output_dir: Path):
+    """Record every executed candidate, including failures, without overwriting runs."""
+    validate_plan(dataset, plan)
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        raise FileExistsError("output directory already exists")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    receipt = output_dir.parent / f"{output_dir.name}.attempt-{uuid.uuid4().hex}.json"
+    attempt = {
+        "schema_version": 1,
+        "plan_hash": plan["plan_hash"],
+        "configuration": plan["resnet_config"],
+        "started_at": run_manifest.utc_now_iso(),
+        "status": "running",
+    }
+    write_json(receipt, attempt)
+    start = time.perf_counter()
+    try:
+        result = _evaluate(dataset, plan, output_dir)
+    except Exception as error:
+        attempt.update(
+            status="failed", error_type=type(error).__name__, error=str(error)
+        )
+        raise
+    else:
+        attempt["status"] = "completed"
+        return result
+    finally:
+        attempt["wall_seconds"] = time.perf_counter() - start
+        pending = receipt.with_suffix(".pending")
+        write_json(pending, attempt)
+        os.replace(pending, receipt)
+
+
+def _evaluate(dataset, plan, output_dir: Path):
     config = validate_plan(dataset, plan)
     if output_dir.exists():
         raise FileExistsError(
@@ -39,6 +77,7 @@ def evaluate(dataset, plan, output_dir: Path):
     source_checksums = run_manifest.source_file_checksums(
         [
             Path(__file__),
+            Path(controlled_qc.__file__),
             Path(gs_dataset.__file__),
             Path(gs_scenarios.__file__),
             Path(gs_selection.__file__),
@@ -51,13 +90,26 @@ def evaluate(dataset, plan, output_dir: Path):
     )
     ids = {name: i for i, name in enumerate(dataset.baseline.sample_names)}
     data = dataset.baseline
+    controlled = config.qc_mode == "controlled"
+    qc_kwargs = (
+        {
+            "qc_mode": "controlled",
+            "min_observed_rate": config.min_observed_rate,
+            "maf_threshold": config.maf_threshold,
+        }
+        if controlled
+        else {}
+    )
     rows, records, arrays = [], [], {}
     for fold_index, fold in enumerate(plan["folds"]):
         train = np.array([ids[name] for name in fold["train"]])
         test = np.array([ids[name] for name in fold["test"]])
+        start = time.perf_counter()
         gp, fit, relationships = gblup.predict_gblup_fold(
-            train, test, data.genotypes, data.phenotypes
+            train, test, data.genotypes, data.phenotypes, **qc_kwargs
         )
+        gblup_seconds = time.perf_counter() - start
+        start = time.perf_counter()
         rp, record = resnet.predict_resnet_fold(
             data.genotypes,
             data.phenotypes,
@@ -72,6 +124,41 @@ def evaluate(dataset, plan, output_dir: Path):
                 np.array([ids[name] for name in fold["validation"]]),
             ),
         )
+        resnet_seconds = time.perf_counter() - start
+        qc_records = None
+        model_predictions = [("gblup", gp), ("resnet", rp)]
+        if controlled:
+            inner_fit = np.array([ids[name] for name in fold["fit"]])
+            inner_validation = np.array([ids[name] for name in fold["validation"]])
+            inner_relationships = gblup.prepare_fold_relationships(
+                data.genotypes[inner_fit], data.genotypes[inner_validation], **qc_kwargs
+            )
+            if not np.array_equal(
+                relationships.retained_markers, record.final_transform.retained_markers
+            ) or not np.array_equal(
+                inner_relationships.retained_markers,
+                record.selection_transform.retained_markers,
+            ):
+                raise RuntimeError("controlled baseline masks differ")
+            qc_records = {
+                stage: controlled_qc.mask_record(
+                    data.marker_names,
+                    mask,
+                    min_observed_rate=config.min_observed_rate,
+                    maf_threshold=config.maf_threshold,
+                )
+                for stage, mask in (
+                    ("selection", inner_relationships.retained_markers),
+                    ("final", relationships.retained_markers),
+                )
+            }
+            ridge = controlled_qc.ridge_predict(
+                data.genotypes[train],
+                data.genotypes[test],
+                data.phenotypes[train],
+                relationships.retained_markers,
+            )
+            model_predictions.append(("ridge_fixed_alpha_1", ridge))
         prefix = f"fold_{fold_index}"
         arrays.update(
             {
@@ -83,21 +170,28 @@ def evaluate(dataset, plan, output_dir: Path):
                 + "_resnet_selection_means": record.selection_transform.marker_means,
                 prefix
                 + "_resnet_selection_scales": record.selection_transform.marker_scales,
-                prefix
-                + "_resnet_selection_pca_components": record.selection_transform.pca.components_,
-                prefix
-                + "_resnet_selection_pca_mean": record.selection_transform.pca.mean_,
+                prefix + "_resnet_selection_pca_components": resnet.pca_arrays(
+                    record.selection_transform
+                )["components"],
+                prefix + "_resnet_selection_pca_mean": resnet.pca_arrays(
+                    record.selection_transform
+                )["mean"],
                 prefix + "_resnet_final_mask": record.final_transform.retained_markers,
                 prefix + "_resnet_final_means": record.final_transform.marker_means,
                 prefix + "_resnet_scales": record.final_transform.marker_scales,
-                prefix
-                + "_resnet_pca_components": record.final_transform.pca.components_,
-                prefix + "_resnet_pca_mean": record.final_transform.pca.mean_,
+                prefix + "_resnet_pca_components": resnet.pca_arrays(
+                    record.final_transform
+                )["components"],
+                prefix + "_resnet_pca_mean": resnet.pca_arrays(record.final_transform)[
+                    "mean"
+                ],
             }
         )
         records.append(
             {
                 "fold": fold_index,
+                "common_qc": qc_records,
+                "wall_seconds": {"gblup": gblup_seconds, "resnet": resnet_seconds},
                 "best_epoch": record.best_epoch,
                 "validation_family": record.validation_family,
                 "gblup_lambda": fit.lambda_ratio,
@@ -107,7 +201,7 @@ def evaluate(dataset, plan, output_dir: Path):
                 "target_scale": record.final_target_scale,
             }
         )
-        for model, predictions in (("gblup", gp), ("resnet", rp)):
+        for model, predictions in model_predictions:
             for position, prediction in zip(test, predictions, strict=True):
                 observation = dataset.observations.iloc[position]
                 rows.append(
@@ -165,7 +259,16 @@ def evaluate(dataset, plan, output_dir: Path):
                 ),
                 "device": "cpu",
                 "real_adzuki_performance": "unverified",
-                "comparison": "pipeline_vs_pipeline; model-specific QC",
+                "comparison": "controlled_common_qc"
+                if controlled
+                else "pipeline_vs_pipeline; model-specific QC",
+                "candidate_budget": {
+                    "resnet_candidates": 1,
+                    "seeds": [config.seed],
+                    "max_epochs": config.max_epochs,
+                    "ridge_alpha": 1.0 if controlled else None,
+                },
+                "model_adoption": "deferred_pending_independent_trials; GBLUP sufficient remains valid",
                 "folds": records,
             },
         )
@@ -188,6 +291,10 @@ def main():
     parser.add_argument(
         "--policy", type=Path, help="Predeclared scenario JSON (plan only)"
     )
+    parser.add_argument(
+        "--comparison-mode", choices=("legacy", "controlled"), default="legacy"
+    )
+    parser.add_argument("--no-pca", action="store_true")
     parser.add_argument("--max-epochs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -197,7 +304,13 @@ def main():
     if args.command == "plan":
         plan = make_plan(
             dataset,
-            resnet.ResNetConfig(max_epochs=args.max_epochs, seed=args.seed),
+            resnet.ResNetConfig(
+                max_epochs=args.max_epochs,
+                seed=args.seed,
+                qc_mode=args.comparison_mode,
+                use_pca=not args.no_pca,
+                maf_threshold=0.05 if args.comparison_mode == "controlled" else 0.01,
+            ),
             json.loads(args.policy.read_text()) if args.policy else None,
         )
         validate_plan(dataset, plan)

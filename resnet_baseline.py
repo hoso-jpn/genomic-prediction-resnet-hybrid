@@ -21,6 +21,7 @@ from sklearn.model_selection import LeaveOneGroupOut
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import controlled_qc
 import evaluation_split
 import input_qc
 import model
@@ -51,6 +52,8 @@ class ResNetConfig:
     weight_decay: float = 1e-4
     min_observed_rate: float = 0.9
     maf_threshold: float = 0.01
+    qc_mode: str = "legacy"
+    use_pca: bool = True
 
 
 @dataclass(frozen=True)
@@ -60,7 +63,7 @@ class FeatureTransform:
     retained_markers: BoolArray
     marker_means: FloatArray
     marker_scales: FloatArray
-    pca: PCA
+    pca: PCA | None
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,14 @@ def fit_feature_transform(
         & (maf >= config.maf_threshold)
         & (marker_variances > np.finfo(np.float64).eps)
     )
+    if config.qc_mode == "controlled":
+        retained = controlled_qc.marker_mask(
+            values,
+            min_observed_rate=config.min_observed_rate,
+            maf_threshold=config.maf_threshold,
+        )
+    elif config.qc_mode != "legacy":
+        raise ValueError("qc_mode must be legacy or controlled")
     if not retained.any():
         raise ValueError("no markers remain after training-only filtering")
 
@@ -132,6 +143,8 @@ def fit_feature_transform(
     retained_means = marker_means[retained]
     retained_scales = retained_values.std(axis=0)
     standardized = (retained_values - retained_means) / retained_scales
+    if not config.use_pca:
+        return FeatureTransform(retained, retained_means, retained_scales, None)
     component_count = min(
         config.pca_components,
         standardized.shape[0],
@@ -148,6 +161,21 @@ def fit_feature_transform(
     return FeatureTransform(retained, retained_means, retained_scales, pca)
 
 
+def pca_arrays(transform):
+    """Empty arrays explicitly denote a bypassed PCA, never an identity copy."""
+    if transform.pca is None:
+        return {
+            "mean": np.empty(0),
+            "components": np.empty((0, 0)),
+            "explained_variance_ratio": np.empty(0),
+        }
+    return {
+        "mean": transform.pca.mean_,
+        "components": transform.pca.components_,
+        "explained_variance_ratio": transform.pca.explained_variance_ratio_,
+    }
+
+
 def transform_features(
     genotypes: FloatArray,
     transform: FeatureTransform,
@@ -156,7 +184,9 @@ def transform_features(
     values = np.asarray(genotypes, dtype=np.float64)[:, transform.retained_markers]
     imputed = np.where(np.isfinite(values), values, transform.marker_means)
     standardized = (imputed - transform.marker_means) / transform.marker_scales
-    principal_components = transform.pca.transform(standardized)
+    principal_components = (
+        standardized if transform.pca is None else transform.pca.transform(standardized)
+    )
     return standardized.astype(np.float32), principal_components.astype(np.float32)
 
 
@@ -451,16 +481,18 @@ def build_transform_record(
         f"{prefix}_imputation_mean": transform.marker_means,
         f"{prefix}_standardization_mean": transform.marker_means,
         f"{prefix}_standardization_scale": transform.marker_scales,
-        f"{prefix}_pca_mean": transform.pca.mean_,
-        f"{prefix}_pca_components": transform.pca.components_,
+        f"{prefix}_pca_mean": pca_arrays(transform)["mean"],
+        f"{prefix}_pca_components": pca_arrays(transform)["components"],
         f"{prefix}_pca_explained_variance_ratio": (
-            transform.pca.explained_variance_ratio_
+            pca_arrays(transform)["explained_variance_ratio"]
         ),
     }
     record = {
         "input_feature_count": int(transform.retained_markers.size),
         "retained_marker_count": int(transform.retained_markers.sum()),
-        "output_feature_count": int(transform.pca.n_components_),
+        "output_feature_count": int(transform.pca.n_components_)
+        if transform.pca is not None
+        else int(transform.retained_markers.sum()),
         "target_mean": float(target_mean),
         "target_scale": float(target_scale),
         "arrays": {
@@ -783,6 +815,7 @@ def main() -> None:
     source_checksums = run_manifest.source_file_checksums(
         [
             Path(__file__),
+            Path(controlled_qc.__file__),
             Path(model.__file__),
             Path(soynam_data.__file__),
             Path(input_qc.__file__),
