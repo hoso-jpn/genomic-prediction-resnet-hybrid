@@ -115,6 +115,20 @@ def test_failed_build_leaves_no_partial_output(tmp_path):
     )
 
 
+def test_failed_publication_leaves_no_partial_output(tmp_path, monkeypatch):
+    output = tmp_path / "dataset"
+    output.mkdir()
+
+    def fail_final_rename(self, target):
+        raise OSError("simulated final rename failure")
+
+    monkeypatch.setattr(soynam_cran.Path, "replace", fail_final_rename)
+    with pytest.raises(soynam_cran.BuildError, match="failed to publish"):
+        build(tmp_path)
+
+    assert not output.exists() or not list(output.iterdir())
+
+
 def test_family_sample_and_marker_ordering(tmp_path):
     samples = (("S0004", 3), ("S0001", 2), ("S0003", 3), ("S0002", 2))
     intermediates = write_intermediates(

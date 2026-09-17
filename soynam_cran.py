@@ -616,6 +616,31 @@ def write_dataset(data: Intermediates, output_dir: Path) -> dict[str, str]:
     return outputs
 
 
+def publish_dataset(staging: Path, output_dir: Path) -> None:
+    """Publish a verified dataset without exposing a partial target.
+
+    The final directory is first copied to a hidden sibling of ``output_dir``.
+    Because that sibling is on the same filesystem, the last ``replace`` is a
+    single directory rename.  A copy or rename failure therefore leaves either
+    the caller's original empty directory or no target at all, never a prefix
+    of the dataset's files.
+    """
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{output_dir.name}-publish-", dir=output_dir.parent
+        ) as publish_scratch:
+            ready = Path(publish_scratch) / "dataset"
+            shutil.copytree(staging, ready)
+            if output_dir.exists():
+                output_dir.rmdir()
+            ready.replace(output_dir)
+    except OSError as error:
+        raise BuildError(
+            f"failed to publish the completed dataset to '{output_dir.name}'"
+        ) from error
+
+
 def build(
     *,
     output_dir: Path,
@@ -639,7 +664,7 @@ def build(
     tested without CRAN or R.
     """
     output_dir = Path(output_dir)
-    if output_dir.exists() and any(output_dir.iterdir()):
+    if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):
         raise BuildError(
             f"output directory '{output_dir.name}' is not empty; "
             "point --output-dir at a new directory"
@@ -688,9 +713,7 @@ def build(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for path in sorted(staging.iterdir()):
-            shutil.move(str(path), str(output_dir / path.name))
+        publish_dataset(staging, output_dir)
 
     return manifest
 
