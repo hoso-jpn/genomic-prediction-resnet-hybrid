@@ -2,6 +2,7 @@
 
 import csv
 import gzip
+import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,25 @@ GENOTYPE_ENCODING = {
     "B": 1.0,
     "B/B": 1.0,
 }
+# CRAN SoyNAM distributes genotypes as numeric dosages relative to the
+# founder parent (NAM's documentation: 0 = founder homozygous,
+# 1 = heterozygous, 2 = reference homozygous). That is a different input
+# representation from the A/H/B symbols above, not a relabelling of it:
+# no allele-letter mapping for 0/1/2 is documented, so the two must not be
+# translated into each other. Both map onto the same internal additive
+# scale (-1/0/+1) that the models already consume.
+CRAN_DOSAGE_ENCODING = {
+    "0": -1.0,
+    "1": 0.0,
+    "2": 1.0,
+}
+SYMBOLIC_ENCODING_NAME = "symbolic-ahb"
+DOSAGE_ENCODING_NAME = "cran-numeric-dosage"
+GENOTYPE_ENCODINGS = {
+    SYMBOLIC_ENCODING_NAME: GENOTYPE_ENCODING,
+    DOSAGE_ENCODING_NAME: CRAN_DOSAGE_ENCODING,
+}
+MISSING_GENOTYPE_SYMBOLS = frozenset({"-", "NA", ""})
 
 
 @dataclass(frozen=True)
@@ -49,7 +69,11 @@ def _family_id_from_phenotype(path: Path) -> str:
 def _family_id_from_genotype(path: Path) -> str:
     if not path.name.endswith(GENOTYPE_SUFFIX):
         raise ValueError(f"unexpected genotype filename: {path.name}")
-    return path.name.removesuffix(GENOTYPE_SUFFIX).removesuffix("_4312")
+    stem = path.name.removesuffix(GENOTYPE_SUFFIX)
+    # The marker count sits between the family ID and the suffix (the raw
+    # SoyBase files carry "_4312"). Any marker count is accepted so a dataset
+    # built from a different marker set still pairs with its phenotype file.
+    return re.sub(r"_\d+$", "", stem)
 
 
 def _founder_parent_name(family_id: str) -> str:
@@ -322,10 +346,43 @@ def _convert_phenotype_values(
     return numeric_values, keep_mask
 
 
-def _encode_genotypes(frame: pd.DataFrame, family_id: str) -> FloatArray:
+def _select_genotype_encoding(symbols: set[str], family_id: str) -> str | None:
+    """Pick the encoding a family's genotype symbols belong to.
+
+    Returns ``None`` when the family carries no observed genotype at all,
+    which constrains nothing. A family that mixes the two representations
+    is rejected rather than guessed at: ``0``/``1``/``2`` and ``A``/``H``/``B``
+    describe alleles differently, so a file containing both is ambiguous.
+    """
+    matches = [
+        name for name, mapping in GENOTYPE_ENCODINGS.items() if symbols <= set(mapping)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not symbols:
+        return None
+    if not matches:
+        raise ValueError(
+            f"mixed genotype encodings in family '{family_id}': "
+            f"{sorted(symbols)} spans both the A/H/B symbols and CRAN numeric "
+            "dosages; a family must use exactly one representation"
+        )
+    # A symbol set that fits several mappings cannot occur with the current
+    # encodings (their key sets are disjoint), but guard rather than guess.
+    raise ValueError(
+        f"ambiguous genotype encoding in family '{family_id}': {sorted(symbols)}"
+    )
+
+
+def _encode_genotypes(
+    frame: pd.DataFrame, family_id: str
+) -> tuple[FloatArray, str | None]:
     normalized = frame.astype("string").apply(lambda column: column.str.strip())
-    missing = normalized.isna() | normalized.eq("-").fillna(False)
-    known = missing | normalized.isin(list(GENOTYPE_ENCODING))
+    missing = normalized.isna() | normalized.isin(
+        list(MISSING_GENOTYPE_SYMBOLS)
+    ).fillna(False)
+    known_symbols = set(GENOTYPE_ENCODING) | set(CRAN_DOSAGE_ENCODING)
+    known = missing | normalized.isin(list(known_symbols))
     unknown_mask = ~known.to_numpy(dtype=bool)
 
     if unknown_mask.any():
@@ -335,11 +392,15 @@ def _encode_genotypes(frame: pd.DataFrame, family_id: str) -> FloatArray:
         )
         raise ValueError(f"unknown genotype symbols in {family_id}: {unknown}")
 
+    observed = normalized.to_numpy(dtype=object)[~missing.to_numpy(dtype=bool)]
+    encoding = _select_genotype_encoding({str(value) for value in observed}, family_id)
+
     encoded = np.full(normalized.shape, np.nan, dtype=np.float64)
-    for symbol, value in GENOTYPE_ENCODING.items():
-        symbol_mask = normalized.eq(symbol).fillna(False).to_numpy(dtype=bool)
-        encoded[symbol_mask] = value
-    return encoded
+    if encoding is not None:
+        for symbol, value in GENOTYPE_ENCODINGS[encoding].items():
+            symbol_mask = normalized.eq(symbol).fillna(False).to_numpy(dtype=bool)
+            encoded[symbol_mask] = value
+    return encoded, encoding
 
 
 def load_soynam_dataset(
@@ -365,6 +426,8 @@ def load_soynam_dataset(
     resolved_family_files = (
         family_files if family_files is not None else _pair_family_files(data_path)
     )
+    dataset_encoding: str | None = None
+    encoding_family: str | None = None
     for family_id, phenotype_path, genotype_path in resolved_family_files:
         phenotype_frame = _load_phenotype_frame(phenotype_path, family_id)
         genotype_frame = _load_genotype_frame(genotype_path, family_id)
@@ -399,7 +462,19 @@ def load_soynam_dataset(
                 "excluding missing phenotypes"
             )
 
-        genotype_block = _encode_genotypes(genotype_frame.loc[final_samples], family_id)
+        genotype_block, encoding = _encode_genotypes(
+            genotype_frame.loc[final_samples], family_id
+        )
+        if encoding is not None:
+            if dataset_encoding is None:
+                dataset_encoding, encoding_family = encoding, family_id
+            elif encoding != dataset_encoding:
+                raise ValueError(
+                    "genotype encoding differs between families: "
+                    f"'{encoding_family}' uses {dataset_encoding}, "
+                    f"'{family_id}' uses {encoding}; one dataset must use a "
+                    "single representation"
+                )
         phenotype_block = phenotype_values[keep_mask]
 
         genotype_blocks.append(genotype_block)

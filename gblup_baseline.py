@@ -42,7 +42,7 @@ MIN_TRAINING_SAMPLES = 3
 MIN_OBSERVED_RATE = 0.10
 MAF_THRESHOLD = 0.05
 VARIANCE_THRESHOLD = 1e-6
-EXPECTED_FAMILY_COUNT = 16
+EXPECTED_FAMILY_COUNT = 39
 MIN_EXPECTED_FAMILY_COUNT = 2
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_OUTPUT_DIR = Path("gblup_results")
@@ -528,7 +528,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse the GBLUP CLI arguments.
 
     Defaults reproduce the previous fixed behaviour (``data/``,
-    ``gblup_results/``, 16 families) so an existing invocation without
+    ``gblup_results/``, 39 families for the CRAN canonical dataset) so an
+    existing invocation without
     arguments is unchanged, except that external logging is now off unless
     it is requested explicitly.
     """

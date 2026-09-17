@@ -19,6 +19,7 @@ import pandas as pd
 import evaluation_split
 import input_qc
 import run_manifest
+import soynam_cran
 from soynam_data import list_family_files, load_soynam_dataset
 
 ROOT = Path(__file__).resolve().parent
@@ -28,6 +29,7 @@ SOURCES = [
     "input_qc.py",
     "run_manifest.py",
     "run_measurements.py",
+    "soynam_cran.py",
     "soynam_data.py",
     "model.py",
     "gblup_baseline.py",
@@ -104,6 +106,7 @@ def plan_experiment(args):
         "source_file_checksums": source_checksums(),
         "python_version": run_manifest.python_version(),
         "library_versions": run_manifest.library_versions(PACKAGES),
+        "dataset_manifest": soynam_cran.describe_dataset_manifest(args.data_dir),
         "split_plan_hash": split["plan_hash"],
         "seeds": args.seeds,
         "resnet_search_space": {key: [value] for key, value in candidate.items()},
@@ -140,6 +143,16 @@ def validate_experiment(experiment_dir, data_dir):
         "library_versions"
     ] != run_manifest.library_versions(PACKAGES):
         raise ValueError("Python or library versions changed after declaration")
+    # A canonical dataset carries a provenance manifest; a synthetic or legacy
+    # raw directory carries none. Either way the state at plan time must still
+    # hold, so a manifest that appeared, vanished, or changed is rejected.
+    if config.get("dataset_manifest") != soynam_cran.describe_dataset_manifest(
+        data_dir
+    ):
+        raise ValueError(
+            "the canonical dataset manifest changed after declaration; "
+            "create a new experiment"
+        )
     data, checksums = load_data(data_dir, config["max_sample_missing_rate"])
     split_path = experiment_dir / "split-plan.json"
     _, provenance = evaluation_split.load_plan(
