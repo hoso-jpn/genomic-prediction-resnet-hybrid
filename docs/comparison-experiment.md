@@ -1,6 +1,22 @@
 # GBLUP / ResNet比較実験（Issue #6）
 
-実データでの本実験は未実施です。現在の検証はsyntheticの3 family、ResNet 2 seeds、各1 epochのCPU実行です。GPUの環境構築とsmokeは#13、データ・利用条件・除外基準の確定と実測レポートは#6の残作業です。
+実データでの本実験は未実施です。現在の検証はsyntheticの3 family、ResNet 2 seeds、各1 epochのCPU実行です。GPUの環境構築とsmokeは#13で完了し、データ源は下記のとおりCRAN SoyNAM 1.6.2で確定しました。実測レポートは#6の残作業です。
+
+## canonicalなデータ源
+
+入力は`soynam_cran.py`が生成するCRAN SoyNAM 1.6.2由来のcanonical datasetです（生成手順はREADME、出典と基準hashは[data-provenance.md](data-provenance.md)）。
+
+| 項目 | 値 |
+|---|---|
+| source | CRAN SoyNAM 1.6.2（SHA-256 `0bd87f7b101456006a42a11679809349f7545b95dee0b43d954aa5b642995aaa`、GPL-3） |
+| 表現型 | `lmer(Y ~ (1 | environ) + (1 | strain))`、REML、`use.check=FALSE`、欠測yieldの354行のみ除外 |
+| genotype | `gen.qa`を0/1/2/NAのまま使用（`A`/`H`/`B`へ呼び替えない） |
+| 規模 | 5,142 sample / 39 family / 4,312 marker（family 46は`gen.qa`に不在） |
+| 実データ実行例 | `--dataset-id cran-soynam-1.6.2-yield-blup-false`、`--data-source "CRAN SoyNAM 1.6.2"`、`--data-kind real`、GBLUP CLIは`--expected-families 39` |
+
+`plan`は、data directoryに`soynam-cran-*-manifest.json`があればそのfilenameとSHA-256を`experiment.json`へ記録し、`run`・`report`で同一であることを検証します。manifestが無いsynthetic経路は従来どおり動作します。
+
+**`use.check=TRUE`を採用しなかった経緯**: raw `data.line$spot`が全lineで単一set`2A`に退化しており、TRUEでは10,355観測が意図の説明なく除外され、残る観測も本来のsetではないcheck値を受けます。詳細と実測値は[data-provenance.md](data-provenance.md)を参照してください。
 
 ## 対象と事前定義
 
@@ -57,5 +73,7 @@ CPUの動作確認は`--device cpu --data-kind synthetic`を明示します。�
 不確実性はfamilyを単位とする2,000回のpaired bootstrap（seed 42）で、seed平均ResNet−GBLUPのfamily平均差と95%区間を記録します。RMSE差は負、相関差は正がResNet側の改善を表します。学習集合の重複、family数、seed間の依存があるため、独立な反復実験や確定的な優位性の証明とは扱いません。
 
 実行計測はCLI検証後から入力読み込み・全fold評価終了までのwall秒、process CPU user/system秒、process lifetime peak RSS、CUDAのPyTorch allocator peak allocated/reserved bytesです。CUDAは計測前後に同期します。importとartifact直列化はwall計測範囲外です。Windowsのresource情報やCPU実行のCUDA情報はnullです。
+
+canonical datasetの表現型は全familyの全環境を1つの混合モデルで解いた調整値です。held-out familyの観測も分散成分・環境効果の推定に寄与するため、**完全に独立した外部検証や未知環境への予測とは解釈しません**。比較できるのは、同じ調整済み表現型・同じsample集合・同じLOFO splitの上でのGBLUPとResNetの差だけです。marker QC条件の差（観測率 `> 0.1` 対 `>= 0.9`、MAF 0.05対0.01）が残るため、**モデル構造だけの比較にもなりません**。
 
 **GPU使用率・電力・driverが使用するメモリ・他processの負荷はこの計測に含みません。** GPU本実験ではホストの`nvidia-smi`等による時系列記録、GPU名/driver、コンテナimage ID・lock識別、実行日時を併せて保存し、#13の証跡と対応付けてください。CPU/GPUの異なるlockを混ぜた比較や、syntheticの数値を生物学的性能と扱う報告は行いません。

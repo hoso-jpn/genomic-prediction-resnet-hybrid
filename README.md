@@ -11,6 +11,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 機能 | 状態 | 実装 |
 |---|---|---|
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
+| CRAN canonical dataset builder | unit test・実機build検証済み（本実験は未実施） | `soynam_cran.py`, `scripts/build_soynam_canonical.R` |
 | adzuki GSパネルloader | synthetic fixtureで検証（実パネル未検証） | `adzuki_gs_panel_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
@@ -72,8 +73,10 @@ uv sync --frozen --extra gblup --dev
 
 ```text
 <family_id>_phenotype_data.tsv.gz
-<family_id>_4312_SNP_genotype_Wm82.a1.tsv.gz
+<family_id>_<marker数>_SNP_genotype_Wm82.a1.tsv.gz
 ```
+
+genotypeファイル名のmarker数部分（raw SoyBase配布物では`4312`）はfamily IDの一部とは扱いません。CRAN canonical datasetでは`NAM02_4312_SNP_genotype_Wm82.a1.tsv.gz`のようにzero-paddingした`NAMnn`をfamily IDとします。
 
 phenotype/genotypeファイルはファイル名から抽出したfamily IDで対応付けます。同じfamily IDへ複数のphenotypeファイル、または複数のgenotypeファイルが対応する場合はエラーとし、phenotype側とgenotype側のfamily ID集合が一致しない場合もエラーとします。
 
@@ -84,16 +87,21 @@ phenotype/genotypeファイルはファイル名から抽出したfamily IDで�
 | `Corrected Strain` | sample ID |
 | `Yld (kg/ha)` | 収量（kg/ha） |
 
-遺伝型ファイルは、先頭列をmarker ID、残りの列をsample IDとして読み込みます。対応する符号は次のとおりです。
+遺伝型ファイルは、先頭列をmarker ID、残りの列をsample IDとして読み込みます。入力表現は2種類あり、**どちらか一方だけ**を使います。
 
-| 入力 | 数値表現 |
-|---|---:|
-| `A`, `A/A` | -1 |
-| `H`, `A/B` | 0 |
-| `B`, `B/B` | 1 |
-| `-`, empty | missing (`NaN`) |
+| 入力表現 | 入力 | 数値表現 | 由来 |
+|---|---|---:|---|
+| A/H/B記号 | `A`, `A/A` | -1 | SoyBase配布のraw TSV |
+| A/H/B記号 | `H`, `A/B` | 0 | 同上 |
+| A/H/B記号 | `B`, `B/B` | 1 | 同上 |
+| CRAN numeric dosage | `0` | -1 | CRAN SoyNAM `gen.qa` |
+| CRAN numeric dosage | `1` | 0 | 同上 |
+| CRAN numeric dosage | `2` | 1 | 同上 |
+| 共通 | `-`, `NA`, empty | missing (`NaN`) | — |
 
-未知の記号が含まれる場合はエラーとします。
+numeric dosageは**親系統を基準とした0/1/2のdosage**であり（NAMパッケージの記述: 0 = founder homozygous, 1 = heterozygous, 2 = reference homozygous）、どの塩基に対応するかは配布物に記載がありません。したがって`A`/`H`/`B`という生物学的ラベルへ読み替えず、別の入力表現として扱います。内部の加法スケール（-1/0/+1）は共通です。
+
+未知の記号が含まれる場合はエラーとします。1つのfamily内で2つの表現が混在する場合、およびdataset内のfamily間で表現が異なる場合もエラーとします。
 
 loaderは読み込み時に次を検証します。
 
@@ -104,6 +112,66 @@ loaderは読み込み時に次を検証します。
 - phenotype値の欠損・空文字は、sample ID照合が成功した後に判定します。該当するsampleは学習対象から除外されますが、それ以外の値は数値へ変換できない場合エラーになります。欠損個体を除外した結果、familyのRIL sampleが0件になった場合もエラーになります。
 
 出力される配列のsample順序は、phenotypeファイル内の出現順を維持します。
+
+## CRAN canonical datasetの生成
+
+`soynam_cran.py`は、CRAN SoyNAM 1.6.2から上記の入力形式を再現可能に生成します。生成物はGit管理外です。
+
+```bash
+# tarballをローカルに持っている場合（ネットワークを使いません）
+uv run --frozen python soynam_cran.py \
+  --output-dir data \
+  --source-tarball /path/to/SoyNAM_1.6.2.tar.gz \
+  --rscript /path/to/isolated-soynam-env/bin/Rscript
+
+# tarballが無い場合だけ、固定URLから取得します
+uv run --frozen python soynam_cran.py --output-dir data --cache-dir .cache
+```
+
+builderの動作:
+
+1. tarballのSHA-256を検証し、不一致ならR実行前に失敗します。
+2. `scripts/build_soynam_canonical.R`を実行し、tarball内の`soynam.RData` / `soybase.RData`を直接読み込みます（SoyNAM・NAMパッケージはインストールも実行もしません）。
+3. 表現型を**方式D-FALSE**で調整します。
+
+   ```r
+   lmer(Y ~ (1 | environ) + (1 | strain))   # REML、全40 family・全18 environment
+   adjusted = rowMeans(ranef()$G) + mean(Y, na.rm = TRUE)
+   ```
+
+   除外するのは欠測yieldの354行だけです。familyは`data.line$family`列から取得し、strain ID文字列からは推測しません。
+4. genotypeはquality-assuredな`gen.qa`をそのまま使い、strain IDでinner joinします。
+5. family別のgzip TSVを決定的に生成し（gzip headerのmtime固定・filename非埋め込み）、`soynam-cran-1.6.2-manifest.json`を書き出します。
+6. 出力をloaderで再読込し、件数・順序・checksumを検証してから出力ディレクトリを確定します。失敗時は部分生成物を残しません。
+
+生成されるdatasetは**5,142 sample / 39 family / 4,312 marker**です。family 46はQA genotype（`gen.qa`）に含まれないため39 familyになります。
+
+### `use.check=TRUE`を採用しない理由
+
+公式`BLUP()`の既定は`use.check=TRUE`ですが、canonical datasetでは採用しません。raw `data.line$spot`は全lineで単一のset code`2A`に退化しており（`data.check`側は160 set、QA版の`set`列は156 set）、その結果:
+
+- set 2Aのcheckが存在しない6環境の**10,355観測が、意図の説明なく除外されます**。
+- 残る観測も、各lineの本来のsetではなく「その環境のset 2A」のcheck値を受け取るため、ドキュメントが説明するset単位のmicro-environment補正になっていません。
+
+パッケージ内にこの除外を仕様として説明する記述はありません。`use.check=FALSE`は欠測yield以外を除外せず、environment random effectによる多環境調整を維持します。
+
+### R環境の再現
+
+`environments/soynam-linux-64.lock`はLinux x86_64向けの明示lockです。
+
+```bash
+conda create \
+  --prefix /path/to/isolated-soynam-env \
+  --file environments/soynam-linux-64.lock
+```
+
+このlockには監査時の完全な環境（R 4.5.3、lme4 2.0-6、Matrix 1.7-5、コンパイラ一式）が含まれます。**production builder自体はNAM・SoyNAMパッケージのインストールを必要としません**。既定のCPU／GPUイメージにRは追加していません。
+
+### manifestの意味
+
+`soynam-cran-1.6.2-manifest.json`は、source URL・版・tarball SHA-256・CRAN公開日・GPL-3・元データ条件が未確認であること・trait・モデル式・REML・`use_check: false`とその理由・R/lme4/Matrix/BLAS・環境数・元の表現型行数・欠測除外数・sample/family/marker数・genotype符号・欠測率・sample ID一覧とmarker ID一覧のSHA-256・結合後phenotypeのSHA-256・各出力ファイルのSHA-256・builderソースのSHA-256・生成日時を記録します。生成日時を除く内容から`content_hash`を計算するため、**同じ入力から再生成すれば`content_hash`と各gzipはバイト単位で一致します**。
+
+`compare_baselines.py plan`は、data directoryにこのmanifestがあればfilenameとSHA-256を`experiment.json`へ記録し、`run`・`report`時に同一であることを検証します。syntheticデータのようにmanifestが無い場合も従来どおり動作します。
 
 ## 入力の欠損率と除外条件
 
@@ -311,7 +379,7 @@ gblup_results/
 
 ## Docker / Docker Compose
 
-`Dockerfile`（CPU既定イメージ）は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。GPU用の`Dockerfile.cuda`は`cuda/`配下の別lockを使う独立したイメージです（[GPU実行環境](#gpu実行環境)）。R・`rpy2`・`sommer`および`requirements.txt`には依存しません。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
+`Dockerfile`（CPU既定イメージ）は`pyproject.toml`・`uv.lock`に基づき、`uv sync --frozen --extra gblup --dev`でイメージを構築します。GPU用の`Dockerfile.cuda`は`cuda/`配下の別lockを使う独立したイメージです（[GPU実行環境](#gpu実行環境)）。R・`rpy2`・`sommer`および`requirements.txt`には依存しません（`rpy2` optional extraは廃止しました。canonical dataset生成でRを使う場合も、隔離環境のRscriptを外部プロセスとして呼び出すだけです）。ソースコードと`tests/`はイメージへ`COPY`されており、bind mountなしでコンテナ内に存在します。
 
 `docker-compose.yml`のサービスは次の3系統に分かれます。
 
@@ -442,7 +510,10 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 
 - `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
-- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。
+- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。CRAN canonical dataset（5,142 sample / 39 family / 4,312 marker）は生成・検証できますが、**この上でのGBLUP・ResNet本実験はまだ行っていません**。
+- canonical datasetの表現型は、全familyの全環境を1つの混合モデルで解いた調整値です。held-out familyの観測も分散成分と環境効果の推定に寄与するため、**完全に独立した外部検証や未知環境への予測とは解釈できません**。
+- GBLUPとResNetはmarker QCの条件が異なるため（観測率 `> 0.1` 対 `>= 0.9`、MAF 0.05対0.01）、**モデル構造だけの比較にはなりません**。
+- `data/`に残る16 familyのファイルは、出典が未確認のlegacy local datasetです。canonical datasetとは別物として扱い、混在させないでください。
 - CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は対象GPU（RTX 5090）に合わせて選定済みで、CPU側で導入・テスト・sm_120対応を確認し、2026-09-15に対象GPU実機でイメージbuildとsynthetic GPU smokeが成功しました。実データのGPU実行は未実施です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
@@ -452,11 +523,20 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 
 ## データ引用
 
-本解析にはSoyNAMプロジェクトの公開データセットを使用します。
+本解析の**canonicalなデータ源はCRANのRパッケージ SoyNAM 1.6.2**です（Issue #6）。
+
+| 項目 | 値 |
+|---|---|
+| URL | `https://cran.r-project.org/src/contrib/SoyNAM_1.6.2.tar.gz` |
+| SHA-256 | `0bd87f7b101456006a42a11679809349f7545b95dee0b43d954aa5b642995aaa` |
+| CRAN公開日 | 2022-01-04 |
+| パッケージlicense | GPL-3 |
+
+**GPL-3はCRANパッケージのライセンスです。** パッケージが同梱する元のSoyBase由来データの再配布条件は**未確認**であり、GPL-3を根拠にそれが確定したとは扱いません。パッケージのドキュメントによれば、データは2015-11-16にSoyBaseのSoyNAMページから取得されたものです。引用は同パッケージが挙げる文献（Song et al. 2017、Diers et al. 2018、Xavier et al. 2016/2017 ほか）と配布元の案内に従ってください。
 
 - [SoyNAM project - SoyBase](https://www.soybase.org/projects/SoyNAM/)
 
-データの利用条件と引用方法は配布元の案内に従ってください。
+**生データ・個体別の派生データはこのリポジトリへ追加しません。** 生成物は`data/`（`.gitignore`済み）へ出力します。
 
 ## ライセンス
 
