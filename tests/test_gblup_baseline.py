@@ -253,12 +253,12 @@ class GblupBaselineTest(unittest.TestCase):
 
 
 class GblupCliTest(unittest.TestCase):
-    def test_defaults_preserve_the_previous_fixed_behaviour(self) -> None:
+    def test_defaults_target_the_cran_canonical_dataset(self) -> None:
         args = gblup.parse_args([])
 
         self.assertEqual(args.data_dir, Path("data"))
         self.assertEqual(args.output_dir, Path("gblup_results"))
-        self.assertEqual(args.expected_families, 16)
+        self.assertEqual(args.expected_families, 39)
 
     def test_external_logging_is_off_by_default(self) -> None:
         self.assertEqual(gblup.parse_args([]).wandb_mode, "disabled")

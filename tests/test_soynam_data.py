@@ -490,5 +490,99 @@ class SoynamDataTest(unittest.TestCase):
         self.assertIn(genotype_without_suffix.name, message)
 
 
+class CranDosageEncodingTest(unittest.TestCase):
+    """The CRAN canonical layout carries 0/1/2 dosages instead of A/H/B."""
+
+    def _make_data_dir(self) -> Path:
+        return Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    @staticmethod
+    def _write_gzip_tsv(path: Path, rows: list[list[str]]) -> None:
+        with gzip.open(path, mode="wt", newline="") as handle:
+            csv.writer(handle, delimiter="\t").writerows(rows)
+
+    def _write_family(
+        self,
+        data_dir: Path,
+        family_id: str,
+        samples: list[str],
+        marker_rows: list[list[str]],
+    ) -> None:
+        self._write_gzip_tsv(
+            data_dir / f"{family_id}{soynam_data.PHENOTYPE_SUFFIX}",
+            [
+                [soynam_data.SAMPLE_COLUMN, soynam_data.PHENOTYPE_COLUMN],
+                *[[sample, "500.0"] for sample in samples],
+            ],
+        )
+        self._write_gzip_tsv(
+            data_dir / f"{family_id}_4312{soynam_data.GENOTYPE_SUFFIX}",
+            [["marker_id", *samples], *marker_rows],
+        )
+
+    def test_numeric_dosage_maps_onto_the_additive_scale(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(
+            data_dir,
+            "NAM02",
+            ["S1", "S2", "S3"],
+            [["m1", "0", "1", "2"], ["m2", "2", "NA", "0"]],
+        )
+
+        dataset = soynam_data.load_soynam_dataset(data_dir)
+
+        np.testing.assert_allclose(dataset.genotypes[:, 0], [-1.0, 0.0, 1.0])
+        self.assertTrue(np.isnan(dataset.genotypes[1, 1]))
+        np.testing.assert_allclose(dataset.genotypes[:, 1], [1.0, np.nan, -1.0])
+
+    def test_dash_and_blank_stay_missing_under_numeric_dosage(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(
+            data_dir, "NAM02", ["S1", "S2"], [["m1", "-", "1"], ["m2", "", "0"]]
+        )
+
+        dataset = soynam_data.load_soynam_dataset(data_dir)
+
+        self.assertTrue(np.isnan(dataset.genotypes[0, 0]))
+        self.assertTrue(np.isnan(dataset.genotypes[0, 1]))
+
+    def test_mixed_symbols_within_a_family_are_rejected(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(
+            data_dir, "NAM02", ["S1", "S2"], [["m1", "0", "A"], ["m2", "1", "B"]]
+        )
+
+        with self.assertRaisesRegex(ValueError, "mixed genotype encodings"):
+            soynam_data.load_soynam_dataset(data_dir)
+
+    def test_encoding_must_be_consistent_across_families(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(data_dir, "NAM02", ["S1", "S2"], [["m1", "0", "1"]])
+        self._write_family(data_dir, "NAM03", ["S3", "S4"], [["m1", "A", "B"]])
+
+        with self.assertRaisesRegex(
+            ValueError, "genotype encoding differs between families"
+        ):
+            soynam_data.load_soynam_dataset(data_dir)
+
+    def test_unknown_numeric_value_is_rejected(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(data_dir, "NAM02", ["S1", "S2"], [["m1", "0", "3"]])
+
+        with self.assertRaisesRegex(ValueError, "unknown genotype symbols"):
+            soynam_data.load_soynam_dataset(data_dir)
+
+    def test_symbolic_families_still_load_unchanged(self) -> None:
+        data_dir = self._make_data_dir()
+        self._write_family(
+            data_dir, "NAM02", ["S1", "S2"], [["m1", "A", "B"], ["m2", "H", "A/B"]]
+        )
+
+        dataset = soynam_data.load_soynam_dataset(data_dir)
+
+        np.testing.assert_allclose(dataset.genotypes[:, 0], [-1.0, 1.0])
+        np.testing.assert_allclose(dataset.genotypes[:, 1], [0.0, 0.0])
+
+
 if __name__ == "__main__":
     unittest.main()
