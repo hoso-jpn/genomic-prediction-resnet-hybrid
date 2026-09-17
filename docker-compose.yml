@@ -34,7 +34,7 @@ services:
       python gblup_baseline.py
       --data-dir data
       --output-dir gblup_results
-      --expected-families 16
+      --expected-families 39
 
   # ResNet ベースライン（実データ利用者向けの手動実行経路）
   # data/ はread-only、結果ディレクトリのみ書き込み可能。CIでは実行しない。
@@ -137,7 +137,7 @@ services:
       python gblup_baseline.py
       --data-dir data
       --output-dir gblup_results
-      --expected-families 16
+      --expected-families 39
 
   # ---------------------------------------------------------------------
   # legacy / experimental経路（検証済みベースラインではない。既定では起動しない）

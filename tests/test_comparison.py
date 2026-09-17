@@ -11,6 +11,7 @@ from test_cpu_smoke import _write_synthetic_family
 import compare_baselines as comparison
 import evaluation_split
 import run_manifest
+import soynam_cran
 
 
 def arguments(tmp_path):
@@ -153,3 +154,40 @@ def test_bootstrap_reports_undefined_correlations():
     )
     assert result["r"]["mean_difference"] is None
     assert result["rmse_kg_ha"]["mean_difference"] == -1
+
+
+def test_plan_records_no_manifest_for_synthetic_data(tmp_path):
+    args = arguments(tmp_path)
+    config = comparison.plan_experiment(args)
+
+    assert config["dataset_manifest"] is None
+    comparison.validate_experiment(args.experiment_dir, args.data_dir)
+
+
+def test_plan_records_canonical_manifest_and_rejects_a_changed_one(tmp_path):
+    args = arguments(tmp_path)
+    manifest = args.data_dir / soynam_cran.MANIFEST_FILENAME
+    manifest.write_text(json.dumps({"content_hash": "abc"}), encoding="utf-8")
+
+    config = comparison.plan_experiment(args)
+
+    assert config["dataset_manifest"]["filename"] == soynam_cran.MANIFEST_FILENAME
+    assert config["dataset_manifest"]["sha256"] == run_manifest.sha256_file(manifest)
+    # Absolute paths never enter the experiment record.
+    assert str(tmp_path) not in json.dumps(config)
+    comparison.validate_experiment(args.experiment_dir, args.data_dir)
+
+    manifest.write_text(json.dumps({"content_hash": "changed"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="dataset manifest changed"):
+        comparison.validate_experiment(args.experiment_dir, args.data_dir)
+
+
+def test_plan_rejects_a_data_directory_with_two_manifests(tmp_path):
+    args = arguments(tmp_path)
+    (args.data_dir / soynam_cran.MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
+    (args.data_dir / "soynam-cran-9.9.9-manifest.json").write_text(
+        "{}", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="multiple canonical dataset manifests"):
+        comparison.plan_experiment(args)

@@ -4,6 +4,56 @@
 
 調査日: 2026-08-31 / 調査対象リポジトリ: `hoso-jpn/genomic-prediction-resnet-hybrid`
 
+## 0. canonicalなデータ源（2026-09-17 追加）
+
+**Issue #6のcanonicalなデータ源は、CRANのRパッケージ SoyNAM 1.6.2です。** 本文書の§1以降は、それとは別の「公開履歴に残るファイル」および`data/`に残るlegacy local datasetの出典調査であり、記録として残します。
+
+| 項目 | 値 | 区分 |
+|---|---|---|
+| URL | `https://cran.r-project.org/src/contrib/SoyNAM_1.6.2.tar.gz` | 事実 |
+| tarball SHA-256 | `0bd87f7b101456006a42a11679809349f7545b95dee0b43d954aa5b642995aaa` | 事実 |
+| Version / Date / Date-Publication | 1.6.2 / 2022-01-03 / 2022-01-04 15:39 UTC packaged, 17:20 UTC published | 事実（`DESCRIPTION`） |
+| パッケージlicense | GPL-3 | 事実（`DESCRIPTION`） |
+| 同梱MD5 | 14ファイルすべて一致 | 事実（`md5sum -c MD5`） |
+| データ取得元・取得日 | SoyBaseのSoyNAMページから2015-11-16に取得と記載 | 事実（`man/soynam.Rd`の記述） |
+| 元データ（SoyBase）の再配布条件 | **未確認** | 未確認 |
+| citation | Song et al. 2017、Diers et al. 2018、Xavier et al. 2016/2017、Li et al. 2010、Bates 2010、Xavier et al. 2015 | 事実（`man/*.Rd`） |
+
+**GPL-3はCRANパッケージのライセンスであり、これを根拠に元データの再配布条件が確定したとは扱いません。** 生データ・個体別の派生データはこのリポジトリへ追加せず、`soynam_cran.py`が`data/`（Git管理外）へ生成します。
+
+### canonical datasetの定義
+
+| 項目 | 値 |
+|---|---|
+| 表現型 | `lmer(Y ~ (1 | environ) + (1 | strain))`、REML、全40 family・全18 environment、`use.check=FALSE` |
+| 調整値 | `rowMeans(ranef()$G) + mean(Y, na.rm = TRUE)`（公式実装と同じ切片シフト） |
+| 除外 | 欠測yieldの354行のみ |
+| genotype | `soybase`の`gen.qa`。0/1/2/NAのまま保持し、`A`/`H`/`B`へ呼び替えない |
+| 結合 | strain IDによるinner join |
+| 規模 | 5,142 sample / 39 family / 4,312 marker（family 46は`gen.qa`に不在） |
+| genotype欠測率 | 0.25647186 |
+
+### 基準hash（監査で確定、builderが検証する）
+
+| 対象 | SHA-256 |
+|---|---|
+| marker ID（source順・LF結合・末尾改行なし） | `2f24bd7524cd3b7cf003fc8f5c99dffd540a03707d0f64e0f04c07dad001d7d4` |
+| marker ID（1行1 ID・末尾改行あり） | `07e7d257e524e06b69a504643b764aa3526cf0cb0f29f3b2dacedb03bd51c467` |
+| sample ID一覧（昇順・1行1 ID・末尾改行あり） | `d1a43e4ac11abdd70fbbd99b96cb06e468ff130c5d02cba2e51e3245e3dcdfaf` |
+| 結合後phenotype（5,142行・`%.17g`・末尾改行あり） | `22a632e2f8a1cea001bf5c4466c472d23df0331253e1ef7c97ca228664663c75` |
+
+### `use.check=TRUE`を採用しない理由（事実と判断）
+
+- **事実**: raw `data.line$spot`は18水準すべてが`2A_<environ>`形式で、set codeは`2A`の1つだけです。`data.check$spot`は160 set、QA版`data.line.qa$set`は156 setを持ちます。
+- **事実**: set 2Aにcheckレコードがある環境は18中12で、残り6環境に属する10,404行のうち10,355観測がモデルから落ちます（TRUE: 50,035行使用 / FALSE: 60,390行使用）。
+- **事実**: パッケージ内にこの除外を仕様として説明する記述はありません。
+- **判断（推論）**: これは設計上の選択ではなく、退化した`spot`列による実装上の副作用です。したがってcanonical datasetでは`use.check=FALSE`を採用します。
+- **未確認**: `data.line$spot`が単一setに退化している理由（配布元の加工か、パッケージ側の不備か）。
+
+### 16 family localデータとの関係
+
+`data/`に残る16 familyのTSV（NAM02〜NAM23の一部）は、**出典・版・取得日・選定理由がいずれも未確認のlegacy local dataset**です。family番号の集合はCRANの40 familyに含まれますが、同一の配布物・同一版に由来するかは確認していません。canonical datasetとは別物として扱い、1つのdatasetへ混在させないでください。
+
 ## 0. 前提
 
 - 本リポジトリの`LICENSE`（MIT）は、**このリポジトリのコードに対するライセンス**です。第三者が配布するデータや、そこから派生した成果物へ自動的に適用されるものではありません。本文書ではデータ・重みをコードとは別に扱います。
