@@ -1,6 +1,9 @@
 # GBLUP / ResNet比較実験（Issue #6）
 
-実データでの本実験は未実施です。現在の検証はsyntheticの3 family、ResNet 2 seeds、各1 epochのCPU実行です。GPUの環境構築とsmokeは#13で完了し、データ源は下記のとおりCRAN SoyNAM 1.6.2で確定しました。実測レポートは#6の残作業です。
+実データでの本実験は2026-09-18にRTX 5090実機で完走しました。実測値は[実測レポート](experiments/issue-6-soynam-1.6.2.md)にまとめています（集計JSONは`experiments/issue-6-soynam-1.6.2-results.json`）。
+本書は手順・事前定義・計測範囲の規定を扱い、実測値そのものは扱いません。GPUの環境構築とsmokeは#13で完了し、データ源は下記のとおりCRAN SoyNAM 1.6.2で確定しています。
+
+CPU側のsynthetic検証（3 family、ResNet 2 seeds、各1 epoch）は動作確認用として引き続き有効で、精度の測定結果ではありません。
 
 ## canonicalなデータ源
 
@@ -35,7 +38,7 @@
 |---|---|---|
 | 既定marker観測率 | > 0.1 | >= 0.9 |
 | 既定MAF | 0.05 | 0.01 |
-| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化、PCA |
+| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化。標準化済みSNPをCNN経路、そのPCA成分を線形経路へ入力（モデル全体をPCA次元へ圧縮するのではない） |
 | 選択 | 学習foldのREML | 内側family検証でepoch選択、外側学習データで再fit |
 
 閾値の詳細は[欠損率ポリシー](readiness-audit.md)を参照してください。
@@ -76,4 +79,4 @@ CPUの動作確認は`--device cpu --data-kind synthetic`を明示します。�
 
 canonical datasetの表現型は全familyの全環境を1つの混合モデルで解いた調整値です。held-out familyの観測も分散成分・環境効果の推定に寄与するため、**完全に独立した外部検証や未知環境への予測とは解釈しません**。比較できるのは、同じ調整済み表現型・同じsample集合・同じLOFO splitの上でのGBLUPとResNetの差だけです。marker QC条件の差（観測率 `> 0.1` 対 `>= 0.9`、MAF 0.05対0.01）が残るため、**モデル構造だけの比較にもなりません**。
 
-**GPU使用率・電力・driverが使用するメモリ・他processの負荷はこの計測に含みません。** GPU本実験ではホストの`nvidia-smi`等による時系列記録、GPU名/driver、コンテナimage ID・lock識別、実行日時を併せて保存し、#13の証跡と対応付けてください。CPU/GPUの異なるlockを混ぜた比較や、syntheticの数値を生物学的性能と扱う報告は行いません。
+**GPU使用率・電力・driverが使用するメモリ・他processの負荷はこの計測に含みません。** GPU本実験ではホストの`nvidia-smi`等による時系列記録、GPU名/driver、コンテナimage ID・lock識別、実行日時を併せて保存し、#13の証跡と対応付けてください。2026-09-18の本実験では5秒間隔の`nvidia-smi`時系列、実行前後の`nvidia-smi -q`、image ID、host情報を保存しています（[実測レポート](experiments/issue-6-soynam-1.6.2.md)）。CPU/GPUの異なるlockを混ぜた比較や、syntheticの数値を生物学的性能と扱う報告は行いません。

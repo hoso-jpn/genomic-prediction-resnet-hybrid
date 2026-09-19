@@ -11,14 +11,14 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 | 機能 | 状態 | 実装 |
 |---|---|---|
 | SoyNAM raw data loader | 検証済み | `soynam_data.py` |
-| CRAN canonical dataset builder | unit test・実機build検証済み（本実験は未実施） | `soynam_cran.py`, `scripts/build_soynam_canonical.R` |
+| CRAN canonical dataset builder | unit test・実機build検証済み・本実験で使用（2026-09-18） | `soynam_cran.py`, `scripts/build_soynam_canonical.R` |
 | adzuki GSパネルloader | synthetic fixtureで検証（実パネル未検証） | `adzuki_gs_panel_data.py` |
 | GBLUP LOFO baseline | 検証済み | `gblup_baseline.py` |
 | ResNet LOFO baseline | 検証済み | `resnet_baseline.py` |
 | 単体テスト・synthetic CPU smoke（GBLUP・ResNet） | CI実行 | `tests/`, `.github/workflows/ci.yml` |
 | Docker / Docker Compose（unit-test・cpu-smoke） | 検証済み | `Dockerfile`, `docker-compose.yml` |
 | Docker / Docker Compose（gblup・resnet、実データ） | 手動実行経路（CI未実行） | `docker-compose.yml` |
-| CUDA実行環境（GPU smoke・resnet GPU経路） | synthetic GPU smokeをRTX 5090実機で確認（2026-09-15）・実データGPU実験は未実施 | `Dockerfile.cuda`, `cuda/`, `docs/gpu-verification.md` |
+| CUDA実行環境（GPU smoke・resnet GPU経路） | synthetic GPU smokeをRTX 5090実機で確認（2026-09-15）・実データGPU本実験を完走（2026-09-18） | `Dockerfile.cuda`, `cuda/`, `docs/gpu-verification.md` |
 | 旧ResNet学習・W&B Sweep | experimental（`--allow-legacy`必須） | `main.py`, `sweep_config.yaml` |
 | 旧前処理 | experimental（`--allow-legacy`必須） | `preprocess.py` |
 | GNN | experimental（`--allow-legacy`必須） | `train_gnn.py` |
@@ -291,7 +291,7 @@ legacy/experimentalの`main.py`・`train_gnn.py`も同じ`--wandb-mode`を持ち
 
 既定のCPU環境（ルートの`pyproject.toml` / `uv.lock`、PyTorch 2.2.1 CPU build）はCIとDockerの既定経路で使用し、変更していません。GPU比較実験用のCUDA環境は`cuda/pyproject.toml`と`cuda/uv.lock`で独立に固定します。
 
-対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。この組合せは`cu130`のwheelを使うため、ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です（cu128系のwheelなら`>= 570.26`）。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。synthetic GPU smokeは2026-09-15にRTX 5090実機で成功しています（実データのGPU実行は未実施）。
+対象GPUは**NVIDIA GeForce RTX 5090（compute capability 12.0 / sm_120）**で、採用した組合せは**PyTorch 2.12.1 + CUDA 13.0 wheel（cu130）**です。sm_120対応はPyTorch 2.7以降であり、CPU側と同じ2.2.1をCUDA wheelへ置き換えるだけでは使えません。この組合せは`cu130`のwheelを使うため、ホストには**NVIDIA driver >= 580.65.06**とNVIDIA Container Toolkitが必要です（cu128系のwheelなら`>= 570.26`）。選定根拠・トレードオフ・実測したホスト構成は[docs/gpu-verification.md](docs/gpu-verification.md)にまとめています。synthetic GPU smokeは2026-09-15にRTX 5090実機で成功しています。実データのGPU本実験は2026-09-18に同じ実機で完走しました（[実測レポート](docs/experiments/issue-6-soynam-1.6.2.md)）。
 
 ```bash
 # synthetic 3家系でのGPU smoke（GPUが見えない場合はskipではなく失敗する）
@@ -318,7 +318,7 @@ docker compose --profile gpu run --rm gblup-cuda-env
 | CUDA要求時の明確な失敗（GPU不在時） | CPU環境で確認済み |
 | CUDA環境の導入とテストスイート（CPU実行） | 確認済み（torch 2.12.1+cu130、112 passed / 1 skipped。wheelが`sm_120`を含むことも確認） |
 | synthetic GPU smoke（`tests/test_gpu_smoke.py`） | RTX 5090実機で成功（2026-09-15、手動実行。CPU環境ではskip、CIにGPU runnerなし） |
-| 実データのGPU本実験・精度比較 | **未実施**（Issue #6） |
+| 実データのGPU本実験・精度比較 | **実施済み**（2026-09-18・[実測レポート](docs/experiments/issue-6-soynam-1.6.2.md)）。受入判定はIssue #6で継続 |
 
 ## 成果物
 
@@ -508,13 +508,13 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 
 ## 既知の制約
 
-- `split.json`を読み込んで実行を固定する機能（同一splitの強制再利用）は未実装です（Issue #6予定）。
+- 保存済みsplitを読み込んで実行を固定する機能は`--split-file`として実装済みで、2026-09-18の本実験ではGBLUP・全ResNet seedが同一の`split-plan.json`を消費しました。
 - Docker Composeの`gblup`・`resnet`サービスは実データを用いた手動実行経路であり、CIでは実行していません。
-- GPUでの本実験、精度比較、統計的不確実性の評価は未実施です（Issue #6）。CRAN canonical dataset（5,142 sample / 39 family / 4,312 marker）は生成・検証できますが、**この上でのGBLUP・ResNet本実験はまだ行っていません**。
+- GPUでの本実験、精度比較、統計的不確実性の評価は2026-09-18に実施しました（Issue #6・[実測レポート](docs/experiments/issue-6-soynam-1.6.2.md)）。CRAN canonical dataset（5,142 sample / 39 family / 4,312 marker）の上で、GBLUPとResNet 3 seedを共通LOFO 39 foldで実行しています。**事前定義した1候補の設定による単一実験であり、ハイパーパラメータ探索や独立な反復実験は行っていません。**
 - canonical datasetの表現型は、全familyの全環境を1つの混合モデルで解いた調整値です。held-out familyの観測も分散成分と環境効果の推定に寄与するため、**完全に独立した外部検証や未知環境への予測とは解釈できません**。
 - GBLUPとResNetはmarker QCの条件が異なるため（観測率 `> 0.1` 対 `>= 0.9`、MAF 0.05対0.01）、**モデル構造だけの比較にはなりません**。
 - `data/`に残る16 familyのファイルは、出典が未確認のlegacy local datasetです。canonical datasetとは別物として扱い、混在させないでください。
-- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は対象GPU（RTX 5090）に合わせて選定済みで、CPU側で導入・テスト・sm_120対応を確認し、2026-09-15に対象GPU実機でイメージbuildとsynthetic GPU smokeが成功しました。実データのGPU実行は未実施です。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
+- CUDA実行環境（`Dockerfile.cuda` / `cuda/uv.lock` / `--profile gpu`）は対象GPU（RTX 5090）に合わせて選定済みで、CPU側で導入・テスト・sm_120対応を確認し、2026-09-15に対象GPU実機でイメージbuildとsynthetic GPU smokeが成功しました。実データのGPU実行は2026-09-18に完走しています。CIにGPU runnerは無く、CIの成功はGPU経路の検証にはなりません（[docs/gpu-verification.md](docs/gpu-verification.md)）。
 - GPU実行の数値はCPU実行と完全には一致しません（cuDNNのアルゴリズム選択等）。比較時は同一splitと同一尺度を使い、この差を制約として明記してください。
 - 既定のCPU環境（torch 2.2.1）とCUDA環境（torch 2.12.1）ではtorchのバージョンが異なります。CPU/GPUを直接比較する場合は、CUDAイメージでCPU実行する`resnet-cpu-cuda-env`・`gblup-cuda-env`を使ってtorchを揃えてください。
 - `preprocess.py`、`main.py`、`train_gnn.py`、dummy graph、W&B Sweepはlegacy/experimentalであり、検証済みベースライン経路には含まれません。`--allow-legacy`は誤用防止のための確認であり、上記スクリプトの前処理・評価上の問題を解消するものではありません。
@@ -544,7 +544,7 @@ GitHub Actionsでは、管理対象のPythonコード全体のformat/lint（`ruf
 
 ## 事前定義したGBLUP・ResNet比較
 
-`compare_baselines.py`のplan/run/reportで同じLOFO分割を固定し、全seedのOOF・精度・計算資源を照合して集計できます。[比較実験の手順と未検証範囲](docs/comparison-experiment.md)を参照してください。実データ・GPU本実験は未実施です。
+`compare_baselines.py`のplan/run/reportで同じLOFO分割を固定し、全seedのOOF・精度・計算資源を照合して集計できます。[比較実験の手順と未検証範囲](docs/comparison-experiment.md)を参照してください。実データ・GPU本実験の実測値は[実測レポート](docs/experiments/issue-6-soynam-1.6.2.md)にまとめています。
 
 GS panelの読み込み容量上限・実測範囲は
 [panel-loader-scaling.md](docs/panel-loader-scaling.md) を参照してください。
