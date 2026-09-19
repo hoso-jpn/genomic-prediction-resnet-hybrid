@@ -1219,7 +1219,25 @@
     "The selection-stage stopping epoch and stopping reason are not recorded in the artifacts; only best_epoch is.",
     "ResNet run metadata has no external_logging field, so W&B state cannot be proven from the artifact alone (WANDB_MODE=disabled was passed to every run).",
     "Restore of the archived CUDA image was not tested.",
-    "No offsite or second-medium backup was performed."
+    "No offsite or second-medium backup was performed.",
+    "Scientific: this is a single experiment from one pre-registered configuration; ResNet hyperparameters were not searched, so the figures are not ResNet's optimised performance or an upper bound.",
+    "Scientific: marker QC and preprocessing differ between the models (observed-rate 0.1 vs 0.9, MAF 0.05 vs 0.01; measured marker retention 100.0% vs 13.2%), so this is not an architecture-only comparison.",
+    "Scientific: the adjusted phenotype was fitted over all families at once, so observations from the held-out family contribute to the variance components and environment effects; this is not fully independent external validation nor prediction into an unseen environment.",
+    "Scientific: LOFO training sets overlap heavily and the three seeds share one outer split, so the paired family bootstrap gives descriptive intervals, not a significance test based on independent replication.",
+    "Scientific: conclusions are limited to SoyNAM yield under this configuration and these evaluation conditions, and are not generalised to adzuki or to other traits."
   ],
-  "supplementary_note": "The seed ensemble figure reported in the Markdown section 9.3 is an exploratory additional aggregation over this experiment's OOF, outside the pre-registered definition. It is not a result of this experiment and is not part of comparison.json. It must not be confused with the seed-mean of per-family metrics used by the bootstrap."
+  "supplementary_note": "The seed ensemble figure reported in the Markdown section 9.3 is an exploratory additional aggregation over this experiment's OOF, outside the pre-registered definition. It is not a result of this experiment and is not part of comparison.json. It must not be confused with the seed-mean of per-family metrics used by the bootstrap.",
+  "see_also": {
+    "markdown_report": "docs/experiments/issue-6-soynam-1.6.2.md",
+    "sections": {
+      "scientific_limitations": "section 8",
+      "common_lofo_and_per_model_preprocessing": "section 3",
+      "accuracy_and_uncertainty": "section 4",
+      "compute_cost_and_measurement_scope": "section 5",
+      "provenance_difference": "section 6",
+      "supplementary_diagnostics": "section 9",
+      "archive": "section 11"
+    },
+    "note": "The Markdown report is the authoritative narrative; this file carries only publishable aggregate values and identifiers."
+  }
 }

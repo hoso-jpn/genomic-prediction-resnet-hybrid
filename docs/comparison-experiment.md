@@ -38,7 +38,7 @@ CPU側のsynthetic検証（3 family、ResNet 2 seeds、各1 epoch）は動作確
 |---|---|---|
 | 既定marker観測率 | > 0.1 | >= 0.9 |
 | 既定MAF | 0.05 | 0.01 |
-| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化、PCA |
+| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化。標準化済みSNPをCNN経路、そのPCA成分を線形経路へ入力（モデル全体をPCA次元へ圧縮するのではない） |
 | 選択 | 学習foldのREML | 内側family検証でepoch選択、外側学習データで再fit |
 
 閾値の詳細は[欠損率ポリシー](readiness-audit.md)を参照してください。

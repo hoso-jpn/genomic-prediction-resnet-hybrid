@@ -55,13 +55,26 @@
 |---|---|---|
 | marker観測率閾値 | > 0.1 | >= 0.9 |
 | MAF閾値 | 0.05 | 0.01 |
-| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化、PCA 64成分 |
+| 特徴変換 | 学習平均imputation、VanRaden-1 | 学習平均imputation、標準化。標準化済みSNPをCNN経路へ、そのPCA 64成分を線形経路へ入力 |
 | 選択 | 学習foldのREML | 内側family検証でepoch選択、外側学習データで再fit |
 | 実測の採用marker数（39 fold） | min 4310 / median 4312 / max 4312（4,312中、平均 4311.8 = 100.0%） | min 549 / median 561 / max 641（4,312中、平均 570.5 = 13.2%） |
 
 genotype欠測率が25.6%であるため、`>= 0.9`の観測率閾値はmarkerの大半を除外します。**実測でGBLUPは4,312 markerのほぼ全量、ResNetは約13%（平均570.5本）しか使っていません。** これは事前定義した`--gblup-marker-rate 0.1` / `--resnet-marker-rate 0.9`から生じる既知の非対称で、本実験の設計に含まれます。
 
-ResNetはさらにPCAで64成分へ圧縮します（採用markerの分散の平均98.4%を保持）。
+### ResNetにおけるPCAの適用経路
+
+PCAはモデル全体の入力を64次元へ落とすものではありません。実験commit `1b59f3b…` の
+`resnet_baseline.py::transform_features()` と `model.py::GatedGenomicResNet.forward()` によれば、経路は次のとおりです。
+
+1. marker選択・学習平均による欠測補完・標準化を行い、**標準化済みSNP特徴量**を作ります（実測で平均570.5本）。
+2. `transform_features()`はこの標準化済みSNPと、**学習データで当てはめたPCAの64成分**の両方を返します。
+3. `forward(x_snp, x_pc)`では、**線形経路にPCA 64成分を入力**します。
+4. 同時に、**CNN経路には標準化済みの採用SNP特徴量をそのまま入力**します（PCAは通しません）。
+5. 出力は線形経路とCNN経路の和（CNN側はgateでスケール）です。
+
+したがって**モデル全体が64成分だけを利用しているわけではありません**。CNN経路は採用markerの全次元を受け取ります。
+
+PCA 64成分が保持する分散は、採用markerに対して平均98.4%です（この値は線形経路に入る特徴量についての指標であり、CNN経路の入力次元とは別物です）。
 
 ## 4. 全seedの精度と不確実性
 
