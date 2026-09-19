@@ -1,10 +1,15 @@
 # 再現性整備の受入状況（Issue #1）
 
-**監査日**: 2026-09-19（UTC） / **確認基準**: `main@39ce3027bc3440545377d108e9a29714bdb45818`
+**監査日**: 2026-09-19（UTC） / **確認基準（監査対象の実装）**: `main@39ce3027bc3440545377d108e9a29714bdb45818`
 
 親Issue #1の原文（進捗5項目・対応内容42項目・完了条件8項目、計55項目）を元の順序のまま照合した表です。
 チェック欄やIssueのclosedだけを根拠に充足とはせず、実装・テスト関数・CIまたは実機検証の証跡を対応付けています。
-リンクは確認基準SHAに固定しています。
+監査対象の実装へのリンクは確認基準SHAに固定しています。
+
+**追加テストの扱い**: MAFの受入根拠だけは、確認基準SHAの時点では裏付けるテストがありませんでした。
+本PRの `1a5830d648e79a67f6e4d34ebe0e032da185731c`（検証日 2026-09-20）で
+`tests/test_input_qc.py` へ3件追加しています。これらは**確認基準SHA `39ce302` には存在しません**。
+該当行と「MAF処理の根拠範囲」節では、テストへのリンクを追加commit側のSHAに固定して区別しています。
 
 判定の区分:
 
@@ -15,7 +20,7 @@
 | 未確認 | 本棚卸しの範囲では裏付けを確認できなかった（実装の一部だけが確認できた場合を含む） |
 | 実装方式置換・記述更新必要 | 要件は満たすが、原文が想定した方式と実装が異なり、原文側の記述更新が必要 |
 
-集計: **充足 52 / 未確認 1 / 実装方式置換・記述更新必要 2 / 未充足 0**（全55項目）。
+集計: **充足 53 / 未確認 0 / 実装方式置換・記述更新必要 2 / 未充足 0**（全55項目）。
 
 
 ## 進捗
@@ -68,8 +73,8 @@
 | [x] 欠損値をヘテロ接合の符号`0`と区別して保持する | 充足 | [`soynam_data.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/soynam_data.py)（欠損は `NaN` 保持、ヘテロ `0` と別） | [`tests/test_soynam_data.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_soynam_data.py) `test_raw_loader_excludes_parent_and_preserves_missing` | — |
 | [x] 欠損率をsample単位・marker単位で計算できるようにする（PR #24） | 充足 | PR #24 / [`input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/input_qc.py) | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_input_qc.py) `test_default_retains_all_and_audits_missingness` | marker欠損率はsample QC前の記述統計で、marker選択には使わない |
 | [x] 欠損率フィルターの閾値を設定可能にする（PR #24） | 充足 | PR #24 / `--max-sample-missing-rate`・`--min-marker-observed-rate` | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_input_qc.py) `test_sample_threshold_is_inclusive_and_keeps_alignment` / `test_invalid_threshold_fails` / `test_eliminating_a_family_fails` | 閾値境界は下記「欠損率ポリシー」参照 |
-| [x] MAFを欠損値を除外して計算する | 充足 | [`gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/gblup_baseline.py) legacy経路は `np.nanmean(candidate_train)` から allele frequency を算出、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) `marker_mask()` は `nansum / 観測数` を使用。いずれも欠損を除外し学習fold内で計算する | **実装読み取りによる確認**。MAFの算出値そのものをassertするテストは確認できなかった | 下記「MAF処理の根拠範囲」を参照 |
-| [x] MAFフィルターの閾値を設定可能にする | 未確認 | 関数引数 `gblup_baseline.prepare_fold_relationships(maf_threshold=...)`（`0.0 <= maf_threshold < 0.5` を検証）、`resnet_baseline.ResNetConfig.maf_threshold`（既定0.01）、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) `marker_mask(maf_threshold=...)` | **CLIフラグは存在しない**（`--maf-threshold` はどのスクリプトにも無い。`input_qc.add_arguments()` が公開するのは `--max-sample-missing-rate` と `--min-marker-observed-rate` のみ）。閾値を変えてMAF起因でmarkerが除外されることをassertするテストも確認できなかった（MAFを渡す既存テストは `maf_threshold=0.0`、または0.05でもMAF起因の除外をassertしていない） | **判定を充足から未確認へ変更した。** 実装上は関数引数・configフィールドとして設定可能だが、原文の「設定可能」がCLIを含むかを本棚卸しでは確定できない。今回はテストもCLIも追加していない。下記「MAF処理の根拠範囲」を参照 |
+| [x] MAFを欠損値を除外して計算する | 充足 | [`gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/gblup_baseline.py) legacy経路は `np.nanmean`、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) `marker_mask()` は `nansum / 観測数`。いずれも欠損を除外し学習fold内で計算する | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/1a5830d648e79a67f6e4d34ebe0e032da185731c/tests/test_input_qc.py) `test_maf_and_imputation_means_ignore_missing_calls`（欠損4件を含むMAF 0.25の列が閾値0.3で3経路とも除外されること、および採用markerの学習平均が `[0.0, -0.5, -0.75]` であることをassert。欠損を0＝ヘテロとして数える実装ならMAF 0.375・平均 -0.25 となり失敗する） | **本項目の根拠テストは監査対象SHA `39ce302` には存在せず、本PRの `1a5830d` で追加した**（検証日 2026-09-20）。 |
+| [x] MAFフィルターの閾値を設定可能にする | 充足 | Python APIから指定可能: `gblup_baseline.prepare_fold_relationships(maf_threshold=...)`、`resnet_baseline.ResNetConfig.maf_threshold`、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) `marker_mask(maf_threshold=...)`。本体ソースの編集は不要 | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/1a5830d648e79a67f6e4d34ebe0e032da185731c/tests/test_input_qc.py) `test_maf_threshold_changes_marker_admission`（閾値のみを 0.0 / 0.2 / 0.3 と変えて採否maskが変わることを手計算値でassert）、`test_maf_threshold_boundary_keeps_each_existing_operator`（MAFちょうど0.25で GBLUP legacy は `>`、ResNet legacy と controlled QC は `>=` という既存の演算子差を固定） | **CLIで任意のMAF閾値を指定する機能は提供していない**（`--maf-threshold` は無い）。本PRの受入解釈として、Python APIからの指定を検証範囲とした。CLI未提供は制約として残す。**本項目の根拠テストは監査対象SHA `39ce302` には存在せず、本PRの `1a5830d` で追加した**（検証日 2026-09-20）。 |
 | [x] imputation方法を明示し、処理内容をログへ記録する | 充足 | `preprocessing.json` の `"imputation": "training_mean"` | [`tests/test_gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_gblup_baseline.py) `test_fold_preprocessing_record_matches_relationships`、[`tests/test_resnet_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_resnet_baseline.py) `test_build_transform_record_matches_fitted_transform` | — |
 | [x] imputationや標準化のパラメータを学習データだけで推定する | 充足 | [`resnet_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/resnet_baseline.py) `fit_feature_transform()` / [`gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/gblup_baseline.py) | [`tests/test_resnet_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_resnet_baseline.py) `test_feature_statistics_are_fitted_on_training_rows_only`、[`tests/test_gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_gblup_baseline.py) `test_vanraden_relationship_uses_training_statistics` | ここでの「学習データだけでfit」は**モデル側のmarker選択・imputation・標準化・PCA等**を指す |
 
@@ -103,7 +108,7 @@
 | [x] sample ID不一致を検出する負のテストを追加する | 充足 | [`tests/test_soynam_data.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_soynam_data.py) `test_phenotype_missing_sample_id_is_rejected` ほか | CI 単体テスト | — |
 | [x] marker IDまたは順序の不一致を検出する負のテストを追加する（PR #7） | 充足 | [`tests/test_soynam_data.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_soynam_data.py) `test_marker_set_mismatch_is_rejected` / `test_marker_order_mismatch_is_rejected` | CI 単体テスト | — |
 | [x] 重複IDと必須列欠落を検出する負のテストを追加する（PR #7） | 充足 | [`tests/test_soynam_data.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_soynam_data.py) | 重複ID: `test_phenotype_duplicate_sample_id_is_rejected` / `test_genotype_duplicate_sample_header_is_rejected` / `test_marker_id_duplicate_is_rejected`。必須列欠落: `test_missing_phenotype_column_is_rejected`（`"missing phenotype columns"` と列名・ファイル名をassert） | `test_marker_id_missing_or_empty_is_rejected` は**marker ID値**の欠落・空文字の検査であり、必須列欠落の根拠には含めない |
-| [x] 欠損値、MAFおよびimputation処理の単体テストを追加する | 充足 | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_input_qc.py)（6関数） | CI 単体テスト | — |
+| [x] 欠損値、MAFおよびimputation処理の単体テストを追加する | 充足 | [`input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/input_qc.py)、[`gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/gblup_baseline.py)、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) | 欠損値: [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/1a5830d648e79a67f6e4d34ebe0e032da185731c/tests/test_input_qc.py) `test_default_retains_all_and_audits_missingness` / `test_sample_threshold_is_inclusive_and_keeps_alignment` / `test_eliminating_a_family_fails`。MAF: `test_maf_threshold_changes_marker_admission` / `test_maf_threshold_boundary_keeps_each_existing_operator`（`1a5830d` で追加）。imputation: `test_maf_and_imputation_means_ignore_missing_calls`（学習平均を手計算値でassert。`1a5830d` で追加）と [`tests/test_gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_gblup_baseline.py) `test_fold_preprocessing_record_matches_relationships`、[`tests/test_resnet_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_resnet_baseline.py) `test_build_transform_record_matches_fitted_transform`（記録された imputation_mean が当てはめ値と一致） | MAF・imputationを直接支えるテストは**監査対象SHA `39ce302` には無く、本PRの `1a5830d` で追加した**。観測率フィルターの `tests/test_input_qc.py::test_marker_threshold_uses_only_training_calls` はMAFの根拠ではない |
 | [x] split間のsampleまたはgroup重複を検出するテストを追加する | 充足 | [`tests/test_comparison.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_comparison.py) `test_fixed_split_roundtrip_and_tampering`、[`tests/test_gs_scenarios.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_gs_scenarios.py) `test_family_environment_cross_cells_are_excluded` | CI 単体テスト | — |
 | [x] CIで単体テストとCPU smoke testを実行する | 充足 | [`.github/workflows/ci.yml`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/.github/workflows/ci.yml) | main `39ce302` の run [35430336512](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/actions/runs/35430336512) success | GPU runnerは無く、CI成功はGPU経路の検証にならない |
 
@@ -148,14 +153,17 @@ MAFについては「設定できる実装」と「テストで確認した性�
 
 | 区分 | 内容 |
 |---|---|
-| 設定箇所（実装） | `gblup_baseline.prepare_fold_relationships(maf_threshold=...)`（`0.0 <= maf_threshold < 0.5` を検証）、`resnet_baseline.ResNetConfig.maf_threshold`（既定0.01）、[`controlled_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/controlled_qc.py) `marker_mask(maf_threshold=...)` |
-| CLI | **`--maf-threshold` は存在しない。** `input_qc.add_arguments()` が公開するのは `--max-sample-missing-rate` と `--min-marker-observed-rate` のみ |
-| 欠損除外（実装） | legacy経路は `np.nanmean`、controlled経路は `nansum / 観測数`。いずれも欠損を除外し学習fold内で計算する（実装読み取りによる確認） |
-| テストで確認できた範囲 | **観測率フィルター**の挙動のみ。[`tests/test_gblup_baseline.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_gblup_baseline.py) `test_low_observation_marker_is_removed`（`maf_threshold=0.0`、`min_observed_rate=0.5`）と [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/39ce3027bc3440545377d108e9a29714bdb45818/tests/test_input_qc.py) `test_marker_threshold_uses_only_training_calls`（`min_observed_rate` の strict/loose と学習fold限定）は、いずれもMAFの検査ではない |
-| 未確認 | 閾値を変えてMAF起因でmarkerが除外されることをassertするテストは確認できなかった。MAFを渡す既存テストは `maf_threshold=0.0` か、`0.05` でもMAF起因の除外をassertしていない |
+| 設定箇所（実装） | `gblup_baseline.prepare_fold_relationships(maf_threshold=...)`（`0.0 <= maf_threshold < 0.5` を検証）、`resnet_baseline.ResNetConfig.maf_threshold`（既定0.01）、`controlled_qc.marker_mask(maf_threshold=...)`。いずれも**本体ソースを編集せずPython APIから指定できる** |
+| CLI | **`--maf-threshold` は存在しない。** `input_qc.add_arguments()` が公開するのは `--max-sample-missing-rate` と `--min-marker-observed-rate` のみ。本PRでもCLIは追加していない |
+| 欠損除外（実装） | legacy経路は `np.nanmean`、controlled経路は `nansum / 観測数`。いずれも欠損を除外し学習fold内で計算する |
+| 閾値による採否 | [`tests/test_input_qc.py`](https://github.com/hoso-jpn/genomic-prediction-resnet-hybrid/blob/1a5830d648e79a67f6e4d34ebe0e032da185731c/tests/test_input_qc.py) `test_maf_threshold_changes_marker_admission`。閾値のみを 0.0 / 0.2 / 0.3 と変え、MAF 0.5 / 0.25 / 0.125 の3列の採否maskが手計算どおりに変わることをGBLUPとResNetの両経路でassert。観測率・分散フィルターに掛からない列を使い、常に採用される対照列を置いて「全marker除外」の例外を避けている |
+| 境界条件 | 同ファイル `test_maf_threshold_boundary_keeps_each_existing_operator`。MAFちょうど0.25で **GBLUP legacy は `MAF > 閾値`（除外）**、**ResNet legacy と controlled QC は `MAF >= 閾値`（採用）** という既存の差を固定する。観測率フィルターの `>` / `>=` とは独立に検証しており、演算子を統一していない |
+| 欠損の扱い | 同ファイル `test_maf_and_imputation_means_ignore_missing_calls`。欠損4件を含むMAF 0.25の列が閾値0.3で3経路とも除外されること、および採用markerの学習平均が `[0.0, -0.5, -0.75]` であることをassert。欠損を0（ヘテロ）として数える実装ならMAF 0.375・平均 -0.25 になり、いずれのassertも失敗する |
+| 学習データ限定 | 既存テストを再利用。`tests/test_gblup_baseline.py` `test_test_genotypes_do_not_change_training_preprocessing`（held-out側だけを変えても採用maskと学習平均が不変）と `tests/test_resnet_baseline.py` `test_feature_statistics_are_fitted_on_training_rows_only`。本PRでは重複させていない |
+| 残る未提供 | CLIからのMAF閾値指定。本PRの受入解釈では検証範囲外とし、制約として残す |
 
-このため「MAFフィルターの閾値を設定可能にする」の判定を**未確認**としています。今回テストやCLIは追加していません。
-
+**このMAF根拠テストは監査対象SHA `39ce302` には存在しません。** 本PRの `1a5830d`（検証日 2026-09-20、CPUで実行）で追加したものです。
+期待値はすべて手計算してから未変更の実装に対して実行し、一致しました。実装側の不具合は見つかっていません。
 
 ## 今回の棚卸しで更新したもの
 
@@ -164,11 +172,12 @@ MAFについては「設定できる実装」と「テストで確認した性�
 | #6 GPU本実験 | 完了。PR #38（merge commit `39ce302`）で実測レポートをマージし、進捗欄の該当項目を充足へ更新した。実験・精度・計算コスト・保存の監査はレポート §10 とIssue #6の完了記録を根拠とし、本棚卸しではやり直していない |
 | group-aware CV | GS経路の `--policy`（3シナリオ）として実装済み。#28（closed / PR #33）が親Issueの未完部分を具体化した。SoyNAM経路は固定LOFOのままで、別CV方式を選ぶCLIは提供しない。シナリオごとの分割条件・known/new制約・bootstrap単位は「GSシナリオの分割条件とbootstrap単位」節に分けて記載 |
 | `rpy2` / `soynam` extra | 廃止済み。現在は学習・評価環境から独立したRscript環境（conda explicit lock）を外部プロセスとして呼び出す方式。rpy2は再導入しない |
+| MAFの受入根拠 | 監査対象SHA `39ce302` の時点では、MAF閾値の変更・境界・欠損の扱いを直接支えるテストが無かった。本PRの `1a5830d` で `tests/test_input_qc.py` へ3件追加し、「MAFフィルターの閾値を設定可能にする」を未確認から充足へ変更した。CLIは追加していない |
 | READMEの家系数 | LOFOは入力の各familyを保持する方式で、CRAN canonical datasetでは39 family。GBLUP CLIの `--expected-families` 既定は39（`gblup_baseline.py` の `EXPECTED_FAMILY_COUNT`）。legacy local datasetの16 familyとは区別する |
 
 ## 残る制約
 
-- **MAFフィルターの閾値にCLIフラグは無く、閾値変更時の挙動を裏付けるテストも確認できていない。** 該当項目の判定は未確認とした（「MAF処理の根拠範囲」節）。本棚卸しではテスト・CLIを追加していない。
+- **MAFフィルターの閾値にCLIフラグは無い**（`--maf-threshold` は未提供）。Python APIからの指定と、閾値・境界・欠損の扱いは `1a5830d` で追加したテストで確認済み（「MAF処理の根拠範囲」節）。CLIからの指定は引き続き未提供で、本PRでも追加していない。
 
 - **GPU経路はCIで実行していない。** CI成功はGPU経路の検証にならない。実機証跡は [gpu-verification.md](gpu-verification.md) と [#6 実測レポート](experiments/issue-6-soynam-1.6.2.md)。
 - **#6は事前定義した1候補による単一実験**で、ハイパーパラメータ探索や独立な反復実験ではない。モデル間でmarker QC・前処理が異なり、アーキテクチャ単独の比較ではない。
