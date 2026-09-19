@@ -1,0 +1,1225 @@
+{
+  "schema_version": 1,
+  "note": "Curated public summary of the Issue #6 GPU experiment. Aggregate values only; no individual-level genotypes, phenotypes or predictions.",
+  "experiment": {
+    "issue": 6,
+    "dataset_id": "cran-soynam-1.6.2-yield-blup-false",
+    "data_source": "CRAN SoyNAM 1.6.2",
+    "data_kind": "real",
+    "trait": "Yld (kg/ha)",
+    "git_commit": "1b59f3b15ce97496a7ecbd509a1eabf222addb49",
+    "samples": 5142,
+    "families": 39,
+    "markers": 4312,
+    "split_strategy": "leave_one_family_out",
+    "folds": 39,
+    "device": "cuda",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "config_hash": "sha256:30bfab1f7bd3b9bedb047bdafae314ef419c2fe14f015c3af59674d9539f96d1",
+    "split_plan_hash": "sha256:a9ae6cdebaff0f88d42ca07d8afb5ab5876a1502e3640088133d7dded33dd29a",
+    "outer_split_hash": "sha256:575f86a2d1d867eaa3192c9c774475a7901524715e2f94e65fbdb3228a7a74bd",
+    "executed_utc": {
+      "start": "2026-09-18T20:20:43Z",
+      "end": "2026-09-18T20:47:52Z",
+      "wall_seconds_total": 1629,
+      "exit_code": 0
+    }
+  },
+  "environment": {
+    "gpu_name": "NVIDIA GeForce RTX 5090",
+    "gpu_compute_capability": "12.0",
+    "nvidia_driver_version": "595.84",
+    "environment_label": "cuda-13.0-torch-2.12.1",
+    "cuda_version": "13.0",
+    "cudnn_version": 92000,
+    "python_version": "3.11.16",
+    "library_versions": {
+      "torch": "2.12.1+cu130",
+      "torch-geometric": "2.7.0",
+      "numpy": "1.26.4",
+      "pandas": "3.0.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.17.1"
+    },
+    "image_id": "sha256:b1d1fbde97042dd0832b98fb6fc74cd48dae4122b93ebded1486ebac6f44dc0f",
+    "build_input_sha256": {
+      "Dockerfile.cuda": "1ce6a4a37d77ac0e581f54d27e90600e7d5bca620349bd28f82fe3777f8e6c47",
+      "cuda/pyproject.toml": "506649b1893b460e5efc3626187b39261f3b7cc671b2b066006b043b886feabb",
+      "cuda/uv.lock": "ae3efbecd0517e1528dd85cfbadd1f30ae8ec881da6f8a9570fcf59c9c110de1"
+    }
+  },
+  "dataset_provenance": {
+    "tarball_sha256": "0bd87f7b101456006a42a11679809349f7545b95dee0b43d954aa5b642995aaa",
+    "manifest_filename": "soynam-cran-1.6.2-manifest.json",
+    "manifest_file_sha256_recorded_in_experiment_json": "782c4eef9c8982381452faa868f86dc284e9ec26ce74ad536f5d3b989218a7cb",
+    "manifest_content_hash_experiment": "4369cbcfe32da98b14183ee6fe3b3277fb87e93f7c7f29d605e9e5f22f2045c4",
+    "manifest_content_hash_earlier_reference": "7bf9e4afff586537323b94f12aefe0e22f862f05ab47cc602914a0ff026307af",
+    "genotype_missing_rate": 0.25647185786375654,
+    "data_identity_hashes": {
+      "joined_phenotype_sha256": "22a632e2f8a1cea001bf5c4466c472d23df0331253e1ef7c97ca228664663c75",
+      "marker_id_list_sha256": "2f24bd7524cd3b7cf003fc8f5c99dffd540a03707d0f64e0f04c07dad001d7d4",
+      "marker_id_file_sha256": "07e7d257e524e06b69a504643b764aa3526cf0cb0f29f3b2dacedb03bd51c467",
+      "sample_id_list_sha256": "d1a43e4ac11abdd70fbbd99b96cb06e468ff130c5d02cba2e51e3245e3dcdfaf"
+    },
+    "data_identity_vs_reference": "identical (78/78 file checksums and all four identity hashes)",
+    "generation_history_vs_reference": "different (builder soynam_cran.py changed in commit bb02bff)"
+  },
+  "accuracy": {
+    "gblup": {
+      "pooled_pearson_r": 0.1856147528758757,
+      "pooled_rmse_kg_ha": 268.0577236590552,
+      "macro_family_mean_r": 0.20936986940175917,
+      "macro_family_mean_rmse_kg_ha": 252.36190428891808,
+      "n_individuals": 5142,
+      "n_families": 39,
+      "n_families_with_defined_r": 39,
+      "families_with_undefined_r": [],
+      "per_family": {
+        "NAM02": {
+          "n": 98,
+          "r": 0.08496486443968838,
+          "rmse_kg_ha": 187.20611861295265
+        },
+        "NAM03": {
+          "n": 137,
+          "r": 0.1215874370749465,
+          "rmse_kg_ha": 286.8275256216901
+        },
+        "NAM04": {
+          "n": 136,
+          "r": 0.38867300995287457,
+          "rmse_kg_ha": 193.85840145621472
+        },
+        "NAM05": {
+          "n": 139,
+          "r": 0.18983205127597985,
+          "rmse_kg_ha": 238.61021834657177
+        },
+        "NAM06": {
+          "n": 140,
+          "r": 0.260622488054328,
+          "rmse_kg_ha": 307.0718669632141
+        },
+        "NAM08": {
+          "n": 138,
+          "r": 0.16324810923484065,
+          "rmse_kg_ha": 251.21146299032853
+        },
+        "NAM09": {
+          "n": 137,
+          "r": 0.27000709401971934,
+          "rmse_kg_ha": 164.29735228434092
+        },
+        "NAM10": {
+          "n": 139,
+          "r": 0.2690136336107373,
+          "rmse_kg_ha": 205.37400616281815
+        },
+        "NAM11": {
+          "n": 123,
+          "r": 0.27332019728547235,
+          "rmse_kg_ha": 223.39971234323963
+        },
+        "NAM12": {
+          "n": 138,
+          "r": 0.2740898235562661,
+          "rmse_kg_ha": 302.07391774840085
+        },
+        "NAM13": {
+          "n": 137,
+          "r": 0.18498933811468615,
+          "rmse_kg_ha": 184.92645042940845
+        },
+        "NAM14": {
+          "n": 137,
+          "r": 0.13997596958405217,
+          "rmse_kg_ha": 222.9013708707187
+        },
+        "NAM15": {
+          "n": 139,
+          "r": 0.05750209905612171,
+          "rmse_kg_ha": 203.93106656063594
+        },
+        "NAM17": {
+          "n": 135,
+          "r": 0.22977323989067938,
+          "rmse_kg_ha": 190.47961117054777
+        },
+        "NAM18": {
+          "n": 136,
+          "r": 0.11333385248637057,
+          "rmse_kg_ha": 242.143949852859
+        },
+        "NAM22": {
+          "n": 138,
+          "r": 0.12198180074896438,
+          "rmse_kg_ha": 218.61273212687937
+        },
+        "NAM23": {
+          "n": 140,
+          "r": -0.010207854849386242,
+          "rmse_kg_ha": 231.4407962792447
+        },
+        "NAM24": {
+          "n": 140,
+          "r": 0.3791877096301981,
+          "rmse_kg_ha": 197.78632103379206
+        },
+        "NAM25": {
+          "n": 121,
+          "r": 0.30138010285002587,
+          "rmse_kg_ha": 219.26633243116075
+        },
+        "NAM26": {
+          "n": 108,
+          "r": 0.19529333062937704,
+          "rmse_kg_ha": 193.6122139244409
+        },
+        "NAM27": {
+          "n": 131,
+          "r": 0.22854684813349238,
+          "rmse_kg_ha": 283.97698754055466
+        },
+        "NAM28": {
+          "n": 112,
+          "r": 0.21845841246342446,
+          "rmse_kg_ha": 184.11410096279306
+        },
+        "NAM29": {
+          "n": 138,
+          "r": 0.15246339119336527,
+          "rmse_kg_ha": 159.6628904169827
+        },
+        "NAM30": {
+          "n": 138,
+          "r": 0.2664934476265084,
+          "rmse_kg_ha": 209.60484862638745
+        },
+        "NAM31": {
+          "n": 127,
+          "r": 0.2330713208540413,
+          "rmse_kg_ha": 165.1287635238714
+        },
+        "NAM32": {
+          "n": 138,
+          "r": 0.3315401936474521,
+          "rmse_kg_ha": 160.36918130486262
+        },
+        "NAM33": {
+          "n": 134,
+          "r": 0.34695297332859504,
+          "rmse_kg_ha": 317.48234564051296
+        },
+        "NAM34": {
+          "n": 133,
+          "r": 0.2846327593989389,
+          "rmse_kg_ha": 205.8528216313375
+        },
+        "NAM36": {
+          "n": 136,
+          "r": 0.2996459992492336,
+          "rmse_kg_ha": 312.4319536809251
+        },
+        "NAM37": {
+          "n": 129,
+          "r": 0.23764395814848185,
+          "rmse_kg_ha": 219.25782102474585
+        },
+        "NAM38": {
+          "n": 132,
+          "r": 0.17440455968574745,
+          "rmse_kg_ha": 189.51827364155517
+        },
+        "NAM39": {
+          "n": 134,
+          "r": 0.05528549475678169,
+          "rmse_kg_ha": 314.4830146584056
+        },
+        "NAM40": {
+          "n": 137,
+          "r": 0.15992773470753502,
+          "rmse_kg_ha": 345.69103416925697
+        },
+        "NAM41": {
+          "n": 99,
+          "r": 0.3091738912545967,
+          "rmse_kg_ha": 177.09530649441064
+        },
+        "NAM42": {
+          "n": 133,
+          "r": 0.16339273345662939,
+          "rmse_kg_ha": 556.1716189790528
+        },
+        "NAM48": {
+          "n": 139,
+          "r": 0.2741857616940552,
+          "rmse_kg_ha": 375.11543845671406
+        },
+        "NAM50": {
+          "n": 132,
+          "r": 0.21480250564691297,
+          "rmse_kg_ha": 434.40263151149475
+        },
+        "NAM54": {
+          "n": 140,
+          "r": 0.3221757497332321,
+          "rmse_kg_ha": 409.95286993901635
+        },
+        "NAM64": {
+          "n": 124,
+          "r": -0.11594112495635805,
+          "rmse_kg_ha": 356.7709378554665
+        }
+      }
+    },
+    "resnet-seed-42": {
+      "pooled_pearson_r": -0.07365722495296302,
+      "pooled_rmse_kg_ha": 299.2253151193155,
+      "macro_family_mean_r": 0.09037235761536609,
+      "macro_family_mean_rmse_kg_ha": 272.39519659840767,
+      "n_individuals": 5142,
+      "n_families": 39,
+      "n_families_with_defined_r": 39,
+      "families_with_undefined_r": [],
+      "per_family": {
+        "NAM02": {
+          "n": 98,
+          "r": -0.1234428523467913,
+          "rmse_kg_ha": 215.6956884446947
+        },
+        "NAM03": {
+          "n": 137,
+          "r": 0.06675197630905384,
+          "rmse_kg_ha": 214.52205220588993
+        },
+        "NAM04": {
+          "n": 136,
+          "r": 0.1139219665921639,
+          "rmse_kg_ha": 229.00526813984007
+        },
+        "NAM05": {
+          "n": 139,
+          "r": 0.2825556192987388,
+          "rmse_kg_ha": 176.15645754551443
+        },
+        "NAM06": {
+          "n": 140,
+          "r": -0.0002329065503283359,
+          "rmse_kg_ha": 310.81077055572797
+        },
+        "NAM08": {
+          "n": 138,
+          "r": 0.12391583747219337,
+          "rmse_kg_ha": 226.0033704845186
+        },
+        "NAM09": {
+          "n": 137,
+          "r": 0.08256923291517972,
+          "rmse_kg_ha": 171.15116767260636
+        },
+        "NAM10": {
+          "n": 139,
+          "r": 0.1655884465042797,
+          "rmse_kg_ha": 246.6330854368767
+        },
+        "NAM11": {
+          "n": 123,
+          "r": 0.24532156918346582,
+          "rmse_kg_ha": 201.08632406621032
+        },
+        "NAM12": {
+          "n": 138,
+          "r": 0.11391978658019519,
+          "rmse_kg_ha": 347.2717550010134
+        },
+        "NAM13": {
+          "n": 137,
+          "r": 0.2710208795721753,
+          "rmse_kg_ha": 160.0129851835434
+        },
+        "NAM14": {
+          "n": 137,
+          "r": 0.07776326926821674,
+          "rmse_kg_ha": 220.86614668500172
+        },
+        "NAM15": {
+          "n": 139,
+          "r": -0.04598917111195585,
+          "rmse_kg_ha": 220.37463031383862
+        },
+        "NAM17": {
+          "n": 135,
+          "r": 0.1309904672313786,
+          "rmse_kg_ha": 180.63323835955185
+        },
+        "NAM18": {
+          "n": 136,
+          "r": 0.0845516901399984,
+          "rmse_kg_ha": 253.80024036951315
+        },
+        "NAM22": {
+          "n": 138,
+          "r": 0.23805048411485558,
+          "rmse_kg_ha": 281.5976121596382
+        },
+        "NAM23": {
+          "n": 140,
+          "r": -0.07137898945329856,
+          "rmse_kg_ha": 229.53396412542426
+        },
+        "NAM24": {
+          "n": 140,
+          "r": 0.27788740061193296,
+          "rmse_kg_ha": 203.7425858808488
+        },
+        "NAM25": {
+          "n": 121,
+          "r": 0.08216201176415902,
+          "rmse_kg_ha": 250.54852508278657
+        },
+        "NAM26": {
+          "n": 108,
+          "r": 0.21217237347073034,
+          "rmse_kg_ha": 170.52667573750537
+        },
+        "NAM27": {
+          "n": 131,
+          "r": 0.1157368333323362,
+          "rmse_kg_ha": 241.6881537431316
+        },
+        "NAM28": {
+          "n": 112,
+          "r": 0.16928941563166228,
+          "rmse_kg_ha": 175.9592388338816
+        },
+        "NAM29": {
+          "n": 138,
+          "r": -0.045813919082334155,
+          "rmse_kg_ha": 164.40568413599155
+        },
+        "NAM30": {
+          "n": 138,
+          "r": 0.1447577126442084,
+          "rmse_kg_ha": 202.85361503019348
+        },
+        "NAM31": {
+          "n": 127,
+          "r": 0.03877814554063187,
+          "rmse_kg_ha": 170.3100091644226
+        },
+        "NAM32": {
+          "n": 138,
+          "r": -0.10460307274374596,
+          "rmse_kg_ha": 181.16653521882452
+        },
+        "NAM33": {
+          "n": 134,
+          "r": 0.16635241893529898,
+          "rmse_kg_ha": 407.02038269647943
+        },
+        "NAM34": {
+          "n": 133,
+          "r": 0.13692632798199222,
+          "rmse_kg_ha": 204.0955640452398
+        },
+        "NAM36": {
+          "n": 136,
+          "r": -0.2068265942890141,
+          "rmse_kg_ha": 495.57494826964603
+        },
+        "NAM37": {
+          "n": 129,
+          "r": 0.20391730070822678,
+          "rmse_kg_ha": 235.8558952852101
+        },
+        "NAM38": {
+          "n": 132,
+          "r": 0.22614633677133342,
+          "rmse_kg_ha": 161.98889599571223
+        },
+        "NAM39": {
+          "n": 134,
+          "r": -0.04654795890864865,
+          "rmse_kg_ha": 637.0023908167542
+        },
+        "NAM40": {
+          "n": 137,
+          "r": 0.05068296157850724,
+          "rmse_kg_ha": 396.0308671695479
+        },
+        "NAM41": {
+          "n": 99,
+          "r": 0.020840427351155055,
+          "rmse_kg_ha": 209.38733331254585
+        },
+        "NAM42": {
+          "n": 133,
+          "r": 0.019348186370811746,
+          "rmse_kg_ha": 580.1341751459053
+        },
+        "NAM48": {
+          "n": 139,
+          "r": 0.2604049110262504,
+          "rmse_kg_ha": 360.8839975643474
+        },
+        "NAM50": {
+          "n": 132,
+          "r": 0.05686049339801994,
+          "rmse_kg_ha": 451.0422630367438
+        },
+        "NAM54": {
+          "n": 140,
+          "r": 0.01655767476118187,
+          "rmse_kg_ha": 476.85357576315954
+        },
+        "NAM64": {
+          "n": 124,
+          "r": -0.02638474557493907,
+          "rmse_kg_ha": 361.1865986596166
+        }
+      }
+    },
+    "resnet-seed-43": {
+      "pooled_pearson_r": 0.0727819380632657,
+      "pooled_rmse_kg_ha": 274.51492551899776,
+      "macro_family_mean_r": 0.10116408156204261,
+      "macro_family_mean_rmse_kg_ha": 256.2210494910946,
+      "n_individuals": 5142,
+      "n_families": 39,
+      "n_families_with_defined_r": 39,
+      "families_with_undefined_r": [],
+      "per_family": {
+        "NAM02": {
+          "n": 98,
+          "r": -0.1229155567937293,
+          "rmse_kg_ha": 179.46719040072506
+        },
+        "NAM03": {
+          "n": 137,
+          "r": -0.06061500557544628,
+          "rmse_kg_ha": 304.8042108916609
+        },
+        "NAM04": {
+          "n": 136,
+          "r": 0.09483413052861975,
+          "rmse_kg_ha": 162.03642461425193
+        },
+        "NAM05": {
+          "n": 139,
+          "r": 0.1709406974435234,
+          "rmse_kg_ha": 216.09414515605744
+        },
+        "NAM06": {
+          "n": 140,
+          "r": 0.02224029054982626,
+          "rmse_kg_ha": 248.28763721067637
+        },
+        "NAM08": {
+          "n": 138,
+          "r": 0.20153298560807223,
+          "rmse_kg_ha": 248.19480877475937
+        },
+        "NAM09": {
+          "n": 137,
+          "r": 0.03560282573238433,
+          "rmse_kg_ha": 173.7403401964969
+        },
+        "NAM10": {
+          "n": 139,
+          "r": 0.19053871447671855,
+          "rmse_kg_ha": 220.04403081298526
+        },
+        "NAM11": {
+          "n": 123,
+          "r": 0.18852359744602615,
+          "rmse_kg_ha": 202.2904213792178
+        },
+        "NAM12": {
+          "n": 138,
+          "r": 0.1410820467682422,
+          "rmse_kg_ha": 300.72767468864544
+        },
+        "NAM13": {
+          "n": 137,
+          "r": 0.2620684676172031,
+          "rmse_kg_ha": 182.12192299951604
+        },
+        "NAM14": {
+          "n": 137,
+          "r": -0.05692367345092998,
+          "rmse_kg_ha": 223.94976576648173
+        },
+        "NAM15": {
+          "n": 139,
+          "r": -0.0829797203533579,
+          "rmse_kg_ha": 206.14395627279708
+        },
+        "NAM17": {
+          "n": 135,
+          "r": 0.11136978399988544,
+          "rmse_kg_ha": 187.0450831682118
+        },
+        "NAM18": {
+          "n": 136,
+          "r": 0.09636652326705991,
+          "rmse_kg_ha": 219.75174117443865
+        },
+        "NAM22": {
+          "n": 138,
+          "r": 0.2411442038582982,
+          "rmse_kg_ha": 243.07583424751053
+        },
+        "NAM23": {
+          "n": 140,
+          "r": -0.011032691676543747,
+          "rmse_kg_ha": 218.08704289427098
+        },
+        "NAM24": {
+          "n": 140,
+          "r": 0.2999917617983475,
+          "rmse_kg_ha": 208.19232274100298
+        },
+        "NAM25": {
+          "n": 121,
+          "r": 0.09075282921530414,
+          "rmse_kg_ha": 245.99706496172286
+        },
+        "NAM26": {
+          "n": 108,
+          "r": 0.1803339568531605,
+          "rmse_kg_ha": 180.88305616603748
+        },
+        "NAM27": {
+          "n": 131,
+          "r": 0.08791825616658797,
+          "rmse_kg_ha": 260.86643866897754
+        },
+        "NAM28": {
+          "n": 112,
+          "r": 0.10008502249518139,
+          "rmse_kg_ha": 172.45503935440664
+        },
+        "NAM29": {
+          "n": 138,
+          "r": 0.03086049808855771,
+          "rmse_kg_ha": 161.1602697110837
+        },
+        "NAM30": {
+          "n": 138,
+          "r": 0.22728261941163305,
+          "rmse_kg_ha": 245.23148668137637
+        },
+        "NAM31": {
+          "n": 127,
+          "r": 0.1188667338080209,
+          "rmse_kg_ha": 182.026769155856
+        },
+        "NAM32": {
+          "n": 138,
+          "r": -0.17789839472723645,
+          "rmse_kg_ha": 189.94971145821623
+        },
+        "NAM33": {
+          "n": 134,
+          "r": 0.21571834695309805,
+          "rmse_kg_ha": 397.19952881453713
+        },
+        "NAM34": {
+          "n": 133,
+          "r": 0.1342421325772395,
+          "rmse_kg_ha": 212.27099780127443
+        },
+        "NAM36": {
+          "n": 136,
+          "r": 0.16547861335918804,
+          "rmse_kg_ha": 303.68493110276614
+        },
+        "NAM37": {
+          "n": 129,
+          "r": 0.17995375732971242,
+          "rmse_kg_ha": 210.41958704358487
+        },
+        "NAM38": {
+          "n": 132,
+          "r": 0.15492369534149508,
+          "rmse_kg_ha": 175.655061719666
+        },
+        "NAM39": {
+          "n": 134,
+          "r": 0.17139379683404382,
+          "rmse_kg_ha": 326.20679819337505
+        },
+        "NAM40": {
+          "n": 137,
+          "r": -0.022490551239011326,
+          "rmse_kg_ha": 363.8825515415492
+        },
+        "NAM41": {
+          "n": 99,
+          "r": 0.1518734886152967,
+          "rmse_kg_ha": 184.79113342892575
+        },
+        "NAM42": {
+          "n": 133,
+          "r": 0.1379765394120125,
+          "rmse_kg_ha": 538.1993534477118
+        },
+        "NAM48": {
+          "n": 139,
+          "r": 0.2023775840771481,
+          "rmse_kg_ha": 456.69919663692673
+        },
+        "NAM50": {
+          "n": 132,
+          "r": 0.06762638026484301,
+          "rmse_kg_ha": 467.9905410438358
+        },
+        "NAM54": {
+          "n": 140,
+          "r": 0.006920716564064823,
+          "rmse_kg_ha": 436.2097032638346
+        },
+        "NAM64": {
+          "n": 124,
+          "r": -0.0005662217248778887,
+          "rmse_kg_ha": 336.78715656731896
+        }
+      }
+    },
+    "resnet-seed-44": {
+      "pooled_pearson_r": -0.069814525663124,
+      "pooled_rmse_kg_ha": 284.12161587985184,
+      "macro_family_mean_r": 0.09490185564816388,
+      "macro_family_mean_rmse_kg_ha": 261.9485431439188,
+      "n_individuals": 5142,
+      "n_families": 39,
+      "n_families_with_defined_r": 39,
+      "families_with_undefined_r": [],
+      "per_family": {
+        "NAM02": {
+          "n": 98,
+          "r": -0.06375556031315184,
+          "rmse_kg_ha": 181.17043274035035
+        },
+        "NAM03": {
+          "n": 137,
+          "r": -0.01704347003358618,
+          "rmse_kg_ha": 332.01934615649265
+        },
+        "NAM04": {
+          "n": 136,
+          "r": 0.08110209566615063,
+          "rmse_kg_ha": 250.40728724989972
+        },
+        "NAM05": {
+          "n": 139,
+          "r": -0.006830478202981591,
+          "rmse_kg_ha": 246.67902423956482
+        },
+        "NAM06": {
+          "n": 140,
+          "r": 0.006319581301542961,
+          "rmse_kg_ha": 305.4455529331397
+        },
+        "NAM08": {
+          "n": 138,
+          "r": 0.061765656535758884,
+          "rmse_kg_ha": 206.08020204482216
+        },
+        "NAM09": {
+          "n": 137,
+          "r": 0.04355216372322338,
+          "rmse_kg_ha": 177.5803322560008
+        },
+        "NAM10": {
+          "n": 139,
+          "r": 0.23490176781248473,
+          "rmse_kg_ha": 234.37563011046285
+        },
+        "NAM11": {
+          "n": 123,
+          "r": 0.2438488217992651,
+          "rmse_kg_ha": 193.22446557771977
+        },
+        "NAM12": {
+          "n": 138,
+          "r": 0.09589556902564082,
+          "rmse_kg_ha": 366.71671442558085
+        },
+        "NAM13": {
+          "n": 137,
+          "r": 0.29191107785500475,
+          "rmse_kg_ha": 182.7912914214952
+        },
+        "NAM14": {
+          "n": 137,
+          "r": 0.032936037297166834,
+          "rmse_kg_ha": 223.00082096217514
+        },
+        "NAM15": {
+          "n": 139,
+          "r": -0.09100136307638905,
+          "rmse_kg_ha": 180.0751009834417
+        },
+        "NAM17": {
+          "n": 135,
+          "r": 0.10303662407456271,
+          "rmse_kg_ha": 180.05077674938664
+        },
+        "NAM18": {
+          "n": 136,
+          "r": 0.1367297809200692,
+          "rmse_kg_ha": 214.42617475237327
+        },
+        "NAM22": {
+          "n": 138,
+          "r": 0.1417809148787233,
+          "rmse_kg_ha": 207.5659922881187
+        },
+        "NAM23": {
+          "n": 140,
+          "r": -0.132085577947577,
+          "rmse_kg_ha": 223.30333563797882
+        },
+        "NAM24": {
+          "n": 140,
+          "r": 0.33327661810473996,
+          "rmse_kg_ha": 205.44011340230404
+        },
+        "NAM25": {
+          "n": 121,
+          "r": 0.12384632228410193,
+          "rmse_kg_ha": 234.0283797805066
+        },
+        "NAM26": {
+          "n": 108,
+          "r": 0.20974562489719664,
+          "rmse_kg_ha": 167.91115664792744
+        },
+        "NAM27": {
+          "n": 131,
+          "r": 0.17642645464477674,
+          "rmse_kg_ha": 290.3770687878118
+        },
+        "NAM28": {
+          "n": 112,
+          "r": 0.049916859363718626,
+          "rmse_kg_ha": 180.01600662801746
+        },
+        "NAM29": {
+          "n": 138,
+          "r": -0.09589216621026463,
+          "rmse_kg_ha": 166.8155014609699
+        },
+        "NAM30": {
+          "n": 138,
+          "r": 0.15688223886658115,
+          "rmse_kg_ha": 203.07141717936173
+        },
+        "NAM31": {
+          "n": 127,
+          "r": 0.08236165523499,
+          "rmse_kg_ha": 171.8893481339393
+        },
+        "NAM32": {
+          "n": 138,
+          "r": -0.1517705516171056,
+          "rmse_kg_ha": 184.46048395114832
+        },
+        "NAM33": {
+          "n": 134,
+          "r": 0.2093653436894577,
+          "rmse_kg_ha": 332.7422281541385
+        },
+        "NAM34": {
+          "n": 133,
+          "r": 0.03933715180876241,
+          "rmse_kg_ha": 227.19809195812869
+        },
+        "NAM36": {
+          "n": 136,
+          "r": 0.07433355695332736,
+          "rmse_kg_ha": 376.12803233771075
+        },
+        "NAM37": {
+          "n": 129,
+          "r": 0.2503223734710797,
+          "rmse_kg_ha": 210.17792611051868
+        },
+        "NAM38": {
+          "n": 132,
+          "r": 0.16919557498680338,
+          "rmse_kg_ha": 184.72865974533423
+        },
+        "NAM39": {
+          "n": 134,
+          "r": 0.20150682268592573,
+          "rmse_kg_ha": 293.9979353562271
+        },
+        "NAM40": {
+          "n": 137,
+          "r": -0.0005073605997269443,
+          "rmse_kg_ha": 402.9481688608953
+        },
+        "NAM41": {
+          "n": 99,
+          "r": 0.2645011493895481,
+          "rmse_kg_ha": 168.125792048199
+        },
+        "NAM42": {
+          "n": 133,
+          "r": 0.06948281428559698,
+          "rmse_kg_ha": 664.6946595308797
+        },
+        "NAM48": {
+          "n": 139,
+          "r": 0.2804038583881609,
+          "rmse_kg_ha": 403.4360384995536
+        },
+        "NAM50": {
+          "n": 132,
+          "r": 0.09654626730094638,
+          "rmse_kg_ha": 488.05455081280536
+        },
+        "NAM54": {
+          "n": 140,
+          "r": 0.057682081864996765,
+          "rmse_kg_ha": 356.41081721633043
+        },
+        "NAM64": {
+          "n": 124,
+          "r": -0.05885396083112991,
+          "rmse_kg_ha": 398.42832548112324
+        }
+      }
+    }
+  },
+  "seed_variation": {
+    "pooled_r": {
+      "values": {
+        "resnet-seed-42": -0.07365722495296302,
+        "resnet-seed-43": 0.0727819380632657,
+        "resnet-seed-44": -0.069814525663124
+      },
+      "mean": -0.02356327085094044,
+      "sd_sample": 0.08345951740214864,
+      "min": -0.07365722495296302,
+      "max": 0.0727819380632657,
+      "range": 0.14643916301622872
+    },
+    "pooled_rmse": {
+      "values": {
+        "resnet-seed-42": 299.2253151193155,
+        "resnet-seed-43": 274.51492551899776,
+        "resnet-seed-44": 284.12161587985184
+      },
+      "mean": 285.9539521727217,
+      "sd_sample": 12.456682173335675,
+      "min": 274.51492551899776,
+      "max": 299.2253151193155,
+      "range": 24.71038960031774
+    },
+    "macro_r": {
+      "values": {
+        "resnet-seed-42": 0.09037235761536609,
+        "resnet-seed-43": 0.10116408156204261,
+        "resnet-seed-44": 0.09490185564816388
+      },
+      "mean": 0.09547943160852419,
+      "sd_sample": 0.005418996394887844,
+      "min": 0.09037235761536609,
+      "max": 0.10116408156204261,
+      "range": 0.010791723946676518
+    },
+    "macro_rmse": {
+      "values": {
+        "resnet-seed-42": 272.39519659840767,
+        "resnet-seed-43": 256.2210494910946,
+        "resnet-seed-44": 261.9485431439188
+      },
+      "mean": 263.52159641114037,
+      "sd_sample": 8.201014028666702,
+      "min": 256.2210494910946,
+      "max": 272.39519659840767,
+      "range": 16.174147107313047
+    },
+    "note": "Seeds change more than weight initialisation. select_validation_family() returns families[(seed + fold_index) % n], so the inner validation family differs per seed in all 39 folds; the selection-stage preprocessing, fold_seed, best_epoch and the number of final refit epochs therefore also differ. The outer LOFO split is fixed by split-plan.json and is identical across seeds."
+  },
+  "paired_family_bootstrap": {
+    "r": {
+      "comparison": "seed-mean of ResNet per-family metric minus GBLUP per-family metric",
+      "families": 39,
+      "mean_difference": -0.11389043779323495,
+      "ci95_low": -0.151011196763583,
+      "ci95_high": -0.07871752129771477,
+      "replicates": 2000,
+      "seed": 42,
+      "unit": "family",
+      "direction": "negative r difference and positive RMSE difference both indicate ResNet is worse than GBLUP"
+    },
+    "rmse_kg_ha": {
+      "comparison": "seed-mean of ResNet per-family metric minus GBLUP per-family metric",
+      "families": 39,
+      "mean_difference": 11.159692122222284,
+      "ci95_low": 2.4917188905605805,
+      "ci95_high": 20.12144213599912,
+      "replicates": 2000,
+      "seed": 42,
+      "unit": "family",
+      "direction": "negative r difference and positive RMSE difference both indicate ResNet is worse than GBLUP"
+    }
+  },
+  "compute_cost": {
+    "gblup": {
+      "wall_seconds": 337.6427506520413,
+      "cpu_user_seconds": 329.414352,
+      "cpu_system_seconds": 8.211834,
+      "process_peak_rss_bytes": 2027925504,
+      "cuda_peak_allocated_bytes": null,
+      "cuda_peak_reserved_bytes": null,
+      "scope": "validated CLI through input loading and model evaluation; before artifact serialization",
+      "peak_rss_scope": "process lifetime, including imports; not a sum across runs",
+      "cuda_memory_scope": "PyTorch allocator only; excludes other processes and driver allocations"
+    },
+    "resnet-seed-42": {
+      "wall_seconds": 394.3279246839229,
+      "cpu_user_seconds": 389.872122,
+      "cpu_system_seconds": 4.041563,
+      "process_peak_rss_bytes": 2584838144,
+      "cuda_peak_allocated_bytes": 303004160,
+      "cuda_peak_reserved_bytes": 545259520,
+      "scope": "validated CLI through input loading and model evaluation; before artifact serialization",
+      "peak_rss_scope": "process lifetime, including imports; not a sum across runs",
+      "cuda_memory_scope": "PyTorch allocator only; excludes other processes and driver allocations"
+    },
+    "resnet-seed-43": {
+      "wall_seconds": 376.43762843392324,
+      "cpu_user_seconds": 371.893594,
+      "cpu_system_seconds": 3.9625559999999997,
+      "process_peak_rss_bytes": 2562420736,
+      "cuda_peak_allocated_bytes": 317366272,
+      "cuda_peak_reserved_bytes": 555745280,
+      "scope": "validated CLI through input loading and model evaluation; before artifact serialization",
+      "peak_rss_scope": "process lifetime, including imports; not a sum across runs",
+      "cuda_memory_scope": "PyTorch allocator only; excludes other processes and driver allocations"
+    },
+    "resnet-seed-44": {
+      "wall_seconds": 413.43497422500513,
+      "cpu_user_seconds": 408.850374,
+      "cpu_system_seconds": 4.09647,
+      "process_peak_rss_bytes": 2570784768,
+      "cuda_peak_allocated_bytes": 310255616,
+      "cuda_peak_reserved_bytes": 564133888,
+      "scope": "validated CLI through input loading and model evaluation; before artifact serialization",
+      "peak_rss_scope": "process lifetime, including imports; not a sum across runs",
+      "cuda_memory_scope": "PyTorch allocator only; excludes other processes and driver allocations"
+    }
+  },
+  "diagnostics": {
+    "gblup": {
+      "between_family_r": 0.39572951035204096,
+      "within_family_r": 0.2078329574668883,
+      "obs_family_mean_sd": 193.19744502064168,
+      "pred_family_mean_sd": 14.310804256046227,
+      "overall_bias": -6.3939731200021015,
+      "retained_markers": {
+        "min": 4310,
+        "max": 4312,
+        "median": 4312,
+        "mean": 4311.794871794872,
+        "total": 4312
+      },
+      "best_epoch": null,
+      "qc": {
+        "maf_threshold": 0.05,
+        "min_observed_rate": 0.1
+      }
+    },
+    "resnet-seed-42": {
+      "between_family_r": -0.1844923390617318,
+      "within_family_r": 0.0672387494858091,
+      "obs_family_mean_sd": 193.19744502064168,
+      "pred_family_mean_sd": 86.05935855718678,
+      "overall_bias": 2.7719863320430704,
+      "retained_markers": {
+        "min": 549,
+        "max": 641,
+        "median": 561,
+        "mean": 570.5384615384615,
+        "total": 4312
+      },
+      "best_epoch": {
+        "min": 1,
+        "max": 46,
+        "median": 16,
+        "mean": 15.974358974358974,
+        "n": 39,
+        "max_epochs": 200,
+        "patience": 20
+      },
+      "pca_explained_variance_sum": {
+        "min": 0.9817064921122571,
+        "max": 0.9846662393358183,
+        "mean": 0.9836889498016901,
+        "n_components": 64
+      },
+      "qc": {
+        "maf_threshold": 0.01,
+        "min_observed_rate": 0.9
+      }
+    },
+    "resnet-seed-43": {
+      "between_family_r": 0.0373399632282686,
+      "within_family_r": 0.10455052512024617,
+      "obs_family_mean_sd": 193.19744502064168,
+      "pred_family_mean_sd": 43.72575344798463,
+      "overall_bias": 6.552499415231978,
+      "retained_markers": {
+        "min": 549,
+        "max": 641,
+        "median": 561,
+        "mean": 570.5384615384615,
+        "total": 4312
+      },
+      "best_epoch": {
+        "min": 2,
+        "max": 80,
+        "median": 10,
+        "mean": 14.512820512820513,
+        "n": 39,
+        "max_epochs": 200,
+        "patience": 20
+      },
+      "pca_explained_variance_sum": {
+        "min": 0.9817003159353481,
+        "max": 0.9846715721152203,
+        "mean": 0.9836871819390062,
+        "n_components": 64
+      },
+      "qc": {
+        "maf_threshold": 0.01,
+        "min_observed_rate": 0.9
+      }
+    },
+    "resnet-seed-44": {
+      "between_family_r": -0.28628346799741533,
+      "within_family_r": 0.09103573887147375,
+      "obs_family_mean_sd": 193.19744502064168,
+      "pred_family_mean_sd": 42.79895478517546,
+      "overall_bias": 10.279296172333034,
+      "retained_markers": {
+        "min": 549,
+        "max": 641,
+        "median": 561,
+        "mean": 570.5384615384615,
+        "total": 4312
+      },
+      "best_epoch": {
+        "min": 2,
+        "max": 48,
+        "median": 16,
+        "mean": 17.333333333333332,
+        "n": 39,
+        "max_epochs": 200,
+        "patience": 20
+      },
+      "pca_explained_variance_sum": {
+        "min": 0.9817073932609565,
+        "max": 0.9846729579309934,
+        "mean": 0.983688907814468,
+        "n_components": 64
+      },
+      "qc": {
+        "maf_threshold": 0.01,
+        "min_observed_rate": 0.9
+      }
+    },
+    "definitions": {
+      "between_family_r": "Pearson correlation over 39 points, one per family, of family-mean observed vs family-mean predicted; families unweighted.",
+      "within_family_r": "Observed and predicted are centred by subtracting their own family mean, then all 5142 centred individuals are pooled into one vector for a single Pearson correlation; individual-weighted. Distinct from macro_family_mean_r.",
+      "usage": "Diagnostic use of observed values only. No correction was applied to any predictor; pooled r values are unchanged from section 4.1."
+    }
+  },
+  "gpu_host_monitoring": {
+    "source": "nvidia-smi sampling on the host during the run",
+    "scope": "whole-device values, not per-process",
+    "period_utc": {
+      "start": "2026-09-18T20:20:43Z",
+      "end": "2026-09-18T20:47:49Z"
+    },
+    "samples": 323,
+    "nominal_interval_seconds": 5,
+    "observed_interval_seconds": {
+      "min": 5,
+      "max": 6,
+      "median": 5,
+      "mean": 5.05
+    },
+    "coverage_percent": 99.0,
+    "gaps_over_10s": 0,
+    "max_gpu_utilization_percent": 89,
+    "max_memory_utilization_percent": 36,
+    "max_memory_used_mib": 1270,
+    "memory_total_mib": 32607,
+    "min_memory_free_mib": 30836,
+    "max_power_draw_w": 348.98,
+    "max_temperature_c": 62,
+    "distinct_compute_pids_observed": 3,
+    "max_concurrent_compute_processes_observed": 1,
+    "caveat": "Sampled at ~5 s; shorter spikes are not captured. Memory/utilisation are device-wide and include a small desktop-session baseline."
+  },
+  "archive": {
+    "experiment_identifier": "20260918T202043Z-30bfab1f",
+    "identifier_basis": "run start UTC + first 8 hex of config_hash",
+    "policy": [
+      "outside git and outside temporary storage",
+      "per-experiment directory",
+      "no automatic deletion until explicitly instructed",
+      "originals retained; copy only"
+    ],
+    "scope": {
+      "experiment_artifacts": 36,
+      "canonical_dataset": 79,
+      "evidence": 12,
+      "provenance_reference_and_tarball": 3,
+      "source_at_experiment_commit": 82,
+      "recomputation_scripts": 1,
+      "cuda_image_archive": 1
+    },
+    "total_files": 216,
+    "total_bytes": 3027354097,
+    "verification": {
+      "method": "per-file relative path and SHA-256 compared against originals, then re-verified with MANIFEST.sha256",
+      "manifest_entries": 215,
+      "manifest_excludes_itself": true,
+      "result": "all files matched"
+    },
+    "cuda_image": {
+      "source_image_id": "sha256:b1d1fbde97042dd0832b98fb6fc74cd48dae4122b93ebded1486ebac6f44dc0f",
+      "docker_image_save_exit_code": 0,
+      "archive_sha256": "a9e065dc31cbb524b4e82748fa39834dacffa678ea8dd79777846ad1861114b1",
+      "archive_bytes": 2939088384,
+      "structure_check": "OCI tar; index.json digest matches source image id",
+      "restore_tested": false,
+      "restore_note": "docker image load was NOT executed; restore procedure is documented only"
+    },
+    "offsite_backup_performed": false,
+    "absolute_paths": "kept in a private local inventory; not published"
+  },
+  "known_limitations": [
+    "Host-wide CPU time and RSS were not collected.",
+    "Container cgroup-level resource usage was not collected.",
+    "cuda_driver_api_version is null (not collected).",
+    "Per-fold wall time for ResNet was not collected.",
+    "The ~107 s difference between total wall and the sum of in-run measurements is unmeasured overhead; its per-stage breakdown was not measured. Container creation was recorded once, so it cannot be attributed to repeated container startup.",
+    "The selection-stage stopping epoch and stopping reason are not recorded in the artifacts; only best_epoch is.",
+    "ResNet run metadata has no external_logging field, so W&B state cannot be proven from the artifact alone (WANDB_MODE=disabled was passed to every run).",
+    "Restore of the archived CUDA image was not tested.",
+    "No offsite or second-medium backup was performed."
+  ],
+  "supplementary_note": "The seed ensemble figure reported in the Markdown section 9.3 is an exploratory additional aggregation over this experiment's OOF, outside the pre-registered definition. It is not a result of this experiment and is not part of comparison.json. It must not be confused with the seed-mean of per-family metrics used by the bootstrap."
+}
