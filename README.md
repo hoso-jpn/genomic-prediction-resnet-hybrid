@@ -27,7 +27,7 @@ SoyNAM（Soybean Nested Association Mapping）の遺伝型データから収量�
 
 ## 評価設計
 
-両ベースラインは、16家系のうち1家系をouter testとして保持するLOFO-CVを使用します。すべての個体は、held-out familyの予測として1回だけOOF（out-of-fold）出力へ現れます。
+両ベースラインは、入力データの各familyを1家系ずつouter testとして保持するLOFO-CVを使用します（家系数は入力データに依存し、CRAN canonical datasetでは39 familyです）。すべての個体は、held-out familyの予測として1回だけOOF（out-of-fold）出力へ現れます。
 
 ### GBLUP
 
@@ -175,7 +175,7 @@ conda create \
 
 ## 入力の欠損率と除外条件
 
-両baselineの `--max-sample-missing-rate` で個体の欠損率上限、`--min-marker-observed-rate` で学習fold内のmarker観測率閾値を指定できます。既定値は従来の入力と計算を維持します。欠損率・採用maskは既存のrun artifactsへ保存します。閾値境界の違いと親Issueの残条件は[再現性の受入状況](docs/readiness-audit.md)を参照してください。
+両baselineの `--max-sample-missing-rate` で個体の欠損率上限、`--min-marker-observed-rate` で学習fold内のmarker観測率閾値を指定できます。既定値は従来の入力と計算を維持します。欠損率・採用maskは既存のrun artifactsへ保存します。閾値境界の違い、および親Issue #1の受入項目55件（進捗5・対応内容42・完了条件8）の判定と残る制約は[再現性の受入状況](docs/readiness-audit.md)を参照してください。
 
 ## adzuki GSパネルの読み込み
 
@@ -213,10 +213,10 @@ uv run --frozen --extra gblup \
   python gblup_baseline.py \
   --data-dir data \
   --output-dir gblup_results \
-  --expected-families 16
+  --expected-families 39
 ```
 
-主なCLI引数は`--data-dir`、`--output-dir`、`--expected-families`、`--wandb-mode`です。既定値は`data`、`gblup_results`、`16`、`disabled`で、引数を省略した場合の入力・出力・家系数はこれまでと同じです。外部サービスの認証情報は不要です。
+主なCLI引数は`--data-dir`、`--output-dir`、`--expected-families`、`--wandb-mode`です。既定値は`data`、`gblup_results`、`39`（`gblup_baseline.py`の`EXPECTED_FAMILY_COUNT`）、`disabled`で、CRAN canonical datasetをそのまま実行できます。外部サービスの認証情報は不要です。
 
 `--expected-families`は家系数チェックを無効化するためのものではなく、期待する家系数の指定です。読み込んだデータの家系数が一致しない場合は実行前に失敗します（LOFO-CVの都合上、2未満は指定できません）。
 
@@ -226,7 +226,7 @@ uv run --frozen --extra gblup \
 gblup_results/oof_predictions.csv
 ```
 
-3 familyのsyntheticデータなど、16家系以外のデータで配線を確認する例:
+3 familyのsyntheticデータなど、39家系以外のデータで配線を確認する例:
 
 ```bash
 uv run --frozen --extra gblup \
@@ -415,14 +415,14 @@ docker compose run --rm cpu-smoke
 `gblup`・`resnet`サービスは、実データを保有する利用者が手動で起動する経路です。`profiles: ["real-data"]`が付いており、CIでは実行しません。実行前に、[入力データ](#入力データ)節と同じ形式のSoyNAMデータを`./data`に配置してください。`data/`はいずれもread-onlyでmountし、結果ディレクトリのみ書き込み可能にしています。
 
 ```bash
-# GBLUP（--data-dir data --output-dir gblup_results --expected-families 16）
+# GBLUP（--data-dir data --output-dir gblup_results --expected-families 39）
 docker compose --profile real-data run --rm gblup
 
 # ResNet
 docker compose --profile real-data run --rm resnet
 ```
 
-`gblup`サービスはW&Bを既定の`disabled`で実行するため、W&B API keyも`WANDB_MODE`の設定も不要です。家系数が16以外のデータを使う場合や、W&Bのmodeを変える場合は、サービス定義の`command`を上書きします。
+`gblup`サービスはW&Bを既定の`disabled`で実行するため、W&B API keyも`WANDB_MODE`の設定も不要です。家系数が39以外のデータを使う場合や、W&Bのmodeを変える場合は、サービス定義の`command`を上書きします。
 
 ```bash
 docker compose --profile real-data run --rm gblup \

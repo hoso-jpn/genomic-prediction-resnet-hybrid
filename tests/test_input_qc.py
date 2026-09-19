@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from test_cpu_smoke import _write_synthetic_family
 
+import controlled_qc
 import gblup_baseline as gblup
 import input_qc
 from resnet_baseline import ResNetConfig, fit_feature_transform
@@ -65,6 +66,165 @@ def test_marker_threshold_uses_only_training_calls():
     assert loose.retained_markers.tolist() == [True, True]
     transform = fit_feature_transform(train, ResNetConfig(min_observed_rate=1), 42)
     assert transform.retained_markers.tolist() == [True, False]
+
+
+# Hand-computed MAF fixture on the internal additive scale (-1 / 0 / +1).
+# Column 0 is a control that clears every threshold used below, so the
+# "no markers pass" guard never fires and MAF stays the only reason a
+# column is dropped.
+#
+#   column 0: 4x -1 and 4x +1      -> mean  0.00, MAF 0.500, observed 8/8
+#   column 1: 3x -1, 1x +1, 4x NaN -> mean -0.50, MAF 0.250, observed 4/8
+#   column 2: 7x -1, 1x +1         -> mean -0.75, MAF 0.125, observed 8/8
+#
+# MAF = min(af, 1 - af) with af = (mean + 1) / 2, the mean taken over
+# observed calls only. Column 1 in dosage terms is [0, 0, 0, 2]: 2 minor
+# alleles out of 2 * 4 observed calls = 0.25. Counting the four NaNs as 0
+# on this scale (i.e. as heterozygotes) would give mean -0.25 and MAF
+# 0.375 instead, which the thresholds below are chosen to expose.
+MAF_FIXTURE = np.array(
+    [
+        [-1.0, -1.0, -1.0],
+        [-1.0, -1.0, -1.0],
+        [-1.0, -1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        [1.0, np.nan, -1.0],
+        [1.0, np.nan, -1.0],
+        [1.0, np.nan, -1.0],
+        [1.0, np.nan, 1.0],
+    ]
+)
+MAF_HELDOUT = np.zeros((2, 3))
+# Observed rates are 1.0, 0.5, 1.0; 0.25 keeps every column admissible on
+# the observed-rate filter so that it cannot mask a MAF decision.
+OBSERVED_RATE = 0.25
+
+
+@pytest.mark.parametrize(
+    ("maf_threshold", "expected"),
+    [
+        (0.0, [True, True, True]),
+        (0.2, [True, True, False]),
+        (0.3, [True, False, False]),
+    ],
+)
+def test_maf_threshold_changes_marker_admission(maf_threshold, expected):
+    """Only the MAF threshold moves, and it alone decides admission."""
+    relationships = gblup.prepare_fold_relationships(
+        MAF_FIXTURE,
+        MAF_HELDOUT,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=maf_threshold,
+    )
+    assert relationships.retained_markers.tolist() == expected
+
+    transform = fit_feature_transform(
+        MAF_FIXTURE,
+        ResNetConfig(
+            min_observed_rate=OBSERVED_RATE,
+            maf_threshold=maf_threshold,
+            use_pca=False,
+        ),
+        42,
+    )
+    assert transform.retained_markers.tolist() == expected
+
+
+def test_maf_threshold_boundary_keeps_each_existing_operator():
+    """At MAF exactly 0.25 the three paths disagree, and that is intended.
+
+    GBLUP legacy admits on ``MAF > threshold``; ResNet legacy and the
+    controlled QC admit on ``MAF >= threshold``. This pins the existing
+    behaviour and must not be unified. The observed-rate filter is held
+    away from its own boundary so the two comparisons stay independent.
+    """
+    exactly_the_column_maf = 0.25
+
+    strict = gblup.prepare_fold_relationships(
+        MAF_FIXTURE,
+        MAF_HELDOUT,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=exactly_the_column_maf,
+    )
+    assert strict.retained_markers.tolist() == [True, False, False]
+
+    inclusive = fit_feature_transform(
+        MAF_FIXTURE,
+        ResNetConfig(
+            min_observed_rate=OBSERVED_RATE,
+            maf_threshold=exactly_the_column_maf,
+            use_pca=False,
+        ),
+        42,
+    )
+    assert inclusive.retained_markers.tolist() == [True, True, False]
+
+    common = controlled_qc.marker_mask(
+        MAF_FIXTURE,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=exactly_the_column_maf,
+    )
+    assert common.tolist() == [True, True, False]
+
+
+def test_maf_and_imputation_means_ignore_missing_calls():
+    """Missing calls are excluded from both the MAF and the training mean.
+
+    Column 1 has MAF 0.25 over its four observed calls. Treating the four
+    NaNs as 0 on the internal scale would raise it to 0.375 and keep the
+    column at a 0.3 threshold, so each assertion below fails under that
+    misreading.
+    """
+    dropped_by_maf = 0.3
+
+    relationships = gblup.prepare_fold_relationships(
+        MAF_FIXTURE,
+        MAF_HELDOUT,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=dropped_by_maf,
+    )
+    assert relationships.retained_markers.tolist() == [True, False, False]
+
+    transform = fit_feature_transform(
+        MAF_FIXTURE,
+        ResNetConfig(
+            min_observed_rate=OBSERVED_RATE,
+            maf_threshold=dropped_by_maf,
+            use_pca=False,
+        ),
+        42,
+    )
+    assert transform.retained_markers.tolist() == [True, False, False]
+
+    common = controlled_qc.marker_mask(
+        MAF_FIXTURE,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=dropped_by_maf,
+    )
+    assert common.tolist() == [True, False, False]
+
+    # The retained-marker training means carry the same exclusion: column 1
+    # averages its four observed calls to -0.5, not the -0.25 that counting
+    # the NaNs as 0 would give.
+    admit_every_column = 0.0
+    kept = gblup.prepare_fold_relationships(
+        MAF_FIXTURE,
+        MAF_HELDOUT,
+        min_observed_rate=OBSERVED_RATE,
+        maf_threshold=admit_every_column,
+    )
+    np.testing.assert_allclose(kept.marker_means, [0.0, -0.5, -0.75])
+
+    kept_transform = fit_feature_transform(
+        MAF_FIXTURE,
+        ResNetConfig(
+            min_observed_rate=OBSERVED_RATE,
+            maf_threshold=admit_every_column,
+            use_pca=False,
+        ),
+        42,
+    )
+    np.testing.assert_allclose(kept_transform.marker_means, [0.0, -0.5, -0.75])
 
 
 @pytest.mark.parametrize("script", ["gblup_baseline.py", "resnet_baseline.py"])
