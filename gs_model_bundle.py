@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import tempfile
 import zipfile
@@ -28,7 +29,8 @@ class GblupBundle:
     marker_means: np.ndarray
     marker_coefficients: np.ndarray
 
-    def predict_matrix(self, matrix):
+    def prediction_qc(self, matrix):
+        """Evaluate each sample against the immutable retained-marker policy."""
         values = np.asarray(matrix, dtype=np.float64)
         if values.ndim != 2 or values.shape[1] != len(self.marker_mask):
             raise ValueError("prediction marker dimension mismatch")
@@ -38,12 +40,68 @@ class GblupBundle:
         ):
             raise ValueError("unknown genotype encoding in prediction matrix")
         retained = values[:, self.marker_mask]
+        observed = np.isfinite(retained).sum(axis=1)
+        rates = observed / int(self.marker_mask.sum())
+        policy = self.metadata.get("prediction_qc")
+        reasons = [[] for _ in observed]
+        for i, count in enumerate(observed):
+            if count == 0:
+                reasons[i].append("no_observed_retained_markers")
+            if policy is None:
+                reasons[i].append("legacy_qc_policy_unavailable")
+            elif rates[i] < policy["min_retained_marker_call_rate"]:
+                reasons[i].append("retained_marker_call_rate_below_minimum")
+            if self.metadata.get("model_card", {}).get("status") == "rejected":
+                reasons[i].append("model_not_accepted")
+        return retained, observed, rates, reasons
+
+    def predict_matrix(self, matrix):
+        retained, _, _, reasons = self.prediction_qc(matrix)
         centered = (
             np.where(np.isnan(retained), self.marker_means, retained)
             - self.marker_means
         )
         # No means, scales, frequencies, masks or model parameters are refitted.
-        return self.metadata["fit"]["intercept"] + centered @ self.marker_coefficients
+        predictions = (
+            self.metadata["fit"]["intercept"] + centered @ self.marker_coefficients
+        )
+        predictions[np.array([bool(reason) for reason in reasons], dtype=bool)] = np.nan
+        return predictions
+
+
+def validate_prediction_qc(policy):
+    if not isinstance(policy, dict) or set(policy) != {
+        "min_retained_marker_call_rate",
+        "basis",
+        "evidence_references",
+    }:
+        raise ValueError(
+            "prediction QC requires call rate, basis and evidence_references"
+        )
+    threshold = policy["min_retained_marker_call_rate"]
+    if (
+        type(threshold) not in (int, float)
+        or not np.isfinite(threshold)
+        or not 0 < threshold <= 1
+    ):
+        raise ValueError("prediction QC call rate must be finite and in (0, 1]")
+    gs_dataset.require_text(policy["basis"], "prediction QC basis")
+    refs = policy["evidence_references"]
+    if not isinstance(refs, list) or any(
+        not isinstance(ref, str) or not ref.strip() for ref in refs
+    ):
+        raise ValueError(
+            "prediction QC evidence_references must be a list of nonempty text"
+        )
+
+
+def default_prediction_qc():
+    """Conservative research fallback, explicitly not a validated customer threshold."""
+    return {
+        "min_retained_marker_call_rate": 1.0,
+        "basis": "research_default_complete_retained_markers; not pilot validated",
+        "evidence_references": [],
+    }
 
 
 def validate_scope(scope):
@@ -69,9 +127,13 @@ def validate_scope(scope):
         gs_dataset.require_text(scope[key], key)
 
 
-def fit_final(dataset, evaluation_dir: Path, output_dir: Path, *, scope):
+def fit_final(
+    dataset, evaluation_dir: Path, output_dir: Path, *, scope, prediction_qc=None
+):
     """Refit the adopted GBLUP QC on all supplied training observations."""
     validate_scope(scope)
+    prediction_qc = default_prediction_qc() if prediction_qc is None else prediction_qc
+    validate_prediction_qc(prediction_qc)
     if output_dir.exists():
         raise FileExistsError("model bundle already exists")
     evidence_paths = [
@@ -129,7 +191,7 @@ def fit_final(dataset, evaluation_dir: Path, output_dir: Path, *, scope):
     )
     coefficients = centered.T @ fit.dual_coefficients / relations.denominator
     metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "gblup_model_bundle",
         "created_at": run_manifest.utc_now_iso(),
         "encoding": gs_panel.SUPPORTED_ENCODING_SCHEMA,
@@ -145,6 +207,7 @@ def fit_final(dataset, evaluation_dir: Path, output_dir: Path, *, scope):
         "evaluation_checksums": evidence_hashes,
         "evaluation_plan_hash": plan["plan_hash"],
         "preprocessing": {**kwargs, "imputation": "fixed_training_mean", "pca": False},
+        "prediction_qc": prediction_qc,
         "fit": {
             "intercept": fit.intercept,
             "lambda_ratio": fit.lambda_ratio,
@@ -164,6 +227,7 @@ def fit_final(dataset, evaluation_dir: Path, output_dir: Path, *, scope):
         ),
         "model_card": {
             "status": "research_only",
+            "review_reference": None,
             "scope": scope,
             "validation_scenario": plan["policy"],
             "fit_final_is_oof": False,
@@ -224,7 +288,7 @@ def load_bundle(path: Path, *, max_bytes=512 * 1024**2) -> GblupBundle:
     if (
         not isinstance(metadata, dict)
         or type(metadata.get("schema_version")) is not int
-        or metadata.get("schema_version") != 1
+        or metadata.get("schema_version") not in (1, 2)
         or metadata.get("kind") != "gblup_model_bundle"
     ):
         raise ValueError("unsupported model bundle schema")
@@ -242,6 +306,18 @@ def load_bundle(path: Path, *, max_bytes=512 * 1024**2) -> GblupBundle:
         or metadata.get("effect_allele") != "ALT"
     ):
         raise ValueError("unknown bundle encoding/dtype/effect allele")
+    if metadata["schema_version"] == 2:
+        validate_prediction_qc(metadata.get("prediction_qc"))
+    elif "prediction_qc" in metadata:
+        raise ValueError("legacy bundle cannot silently acquire a prediction QC policy")
+    if metadata.get("model_card", {}).get("status") not in (
+        "research_only",
+        "conditional",
+        "rejected",
+    ):
+        raise ValueError(
+            "unsupported model status; this path cannot authorize customer release"
+        )
     marker_ids = metadata.get("marker_ids")
     if (
         not isinstance(marker_ids, list)
@@ -348,9 +424,12 @@ def predict(
         )
     ]
     values = bundle.predict_matrix(matrix)
-    if not np.isfinite(values).all():
+    _, observed, rates, reasons = bundle.prediction_qc(matrix)
+    withheld = np.array([bool(reason) for reason in reasons], dtype=bool)
+    if not np.isfinite(values[~withheld]).all():
         raise RuntimeError("nonfinite bundle prediction")
-    return pd.DataFrame(
+    card = metadata["model_card"]
+    result = pd.DataFrame(
         {
             "sample_id": expected_samples,
             "prediction": values,
@@ -359,8 +438,75 @@ def predict(
             "bundle_hash": metadata["bundle_hash"],
             "marker_reordered": marker_ids != expected_markers,
             "sample_reordered": samples != expected_samples,
+            "prediction_status": np.where(withheld, "withheld", "available"),
+            "reason_codes": ["|".join(reason) for reason in reasons],
+            "observed_retained_markers": observed,
+            "retained_marker_call_rate": rates,
+            "model_status": card["status"],
+            "review_reference": card.get("review_reference"),
+            "uncertainty": "point_prediction_only; calibrated_interval_unavailable",
+            "applicability": "operator_declared_scope; statistical_applicability_not_assessed",
+            "validation_scenario": json.dumps(
+                card.get("validation_scenario"), sort_keys=True
+            ),
+            "declared_scope": json.dumps(card["scope"], sort_keys=True),
         }
     )
+    result.attrs["delivery_metadata"] = {
+        "schema_version": 1,
+        "kind": "gs_prediction_delivery",
+        "bundle_hash": metadata["bundle_hash"],
+        "context": context,
+        "model_card": card,
+        "prediction_qc": metadata.get("prediction_qc"),
+        "counts": {
+            "samples": len(result),
+            "available": int((~withheld).sum()),
+            "withheld": int(withheld.sum()),
+        },
+        "statistical_applicability": "not_assessed",
+        "calibrated_prediction_interval": "unavailable",
+        "customer_release_authorized": False,
+    }
+    return result
+
+
+def write_predictions(result, output):
+    """Publish CSV, withheld table and checksum-bound receipt without overwrites."""
+    output = Path(output)
+    targets = [
+        output,
+        output.with_suffix(output.suffix + ".withheld.csv"),
+        output.with_suffix(output.suffix + ".metadata.json"),
+    ]
+    if any(path.exists() for path in targets):
+        raise FileExistsError("prediction delivery output already exists")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".prediction-delivery-", dir=output.parent
+    ) as directory:
+        staged = [Path(directory) / path.name for path in targets]
+        result.to_csv(staged[0], index=False, na_rep="")
+        result[result.prediction_status == "withheld"].to_csv(
+            staged[1], index=False, na_rep=""
+        )
+        payload = {
+            **result.attrs["delivery_metadata"],
+            "checksums": {
+                path.name: run_manifest.sha256_file(path) for path in staged[:2]
+            },
+        }
+        gs_evaluate.write_json(staged[2], payload)
+        published = []
+        try:
+            for source, destination in zip(staged, targets, strict=True):
+                # Hard-link creation is exclusive; a concurrent writer is never overwritten.
+                os.link(source, destination)
+                published.append(destination)
+        except BaseException:
+            for path in published:
+                path.unlink()
+            raise
 
 
 def main():
@@ -371,6 +517,11 @@ def main():
     fit_parser.add_argument("--expected-assembly")
     fit_parser.add_argument("--evaluation", type=Path, required=True)
     fit_parser.add_argument("--scope", type=Path, required=True)
+    fit_parser.add_argument(
+        "--prediction-qc",
+        type=Path,
+        help="Fixed prediction QC policy JSON; default requires complete retained-marker calls (research only)",
+    )
     fit_parser.add_argument("--output-dir", type=Path, required=True)
     prediction_parser = sub.add_parser("predict")
     prediction_parser.add_argument("--bundle", type=Path, required=True)
@@ -393,6 +544,9 @@ def main():
             args.evaluation,
             args.output_dir,
             scope=json.loads(args.scope.read_text()),
+            prediction_qc=json.loads(args.prediction_qc.read_text())
+            if args.prediction_qc
+            else None,
         )
     else:
         result = predict(
@@ -404,8 +558,7 @@ def main():
             else None,
             allow_reorder=args.allow_reorder,
         )
-        with args.output.open("x", encoding="utf-8", newline="") as handle:
-            result.to_csv(handle, index=False)
+        write_predictions(result, args.output)
 
 
 if __name__ == "__main__":

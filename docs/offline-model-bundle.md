@@ -34,8 +34,26 @@ rollback. `none_initial` explicitly means no earlier bundle exists.
 ```bash
 uv run --frozen python gs_model_bundle.py fit-final \
   --dataset dataset.json --evaluation evaluation-001 \
-  --scope scope.json --output-dir model-001
+  --scope scope.json --prediction-qc prediction-qc.json --output-dir model-001
 ```
+
+New bundles use schema **v2**. Freeze sample QC at fit-final; no threshold is
+estimated from a prediction batch. An illustrative **synthetic-only** policy is:
+
+```json
+{
+  "min_retained_marker_call_rate": 0.9,
+  "basis": "Synthetic demonstration; select a customer threshold in the pilot",
+  "evidence_references": []
+}
+```
+
+This is not a recommended commercial cutoff. The inclusive threshold is in
+`(0, 1]` and counts only this model's retained markers. Evidence references record
+the operator's basis; they are not approval verification. If omitted, the
+conservative research fallback requires **all retained markers** (`1.0`); it is
+not pilot validated. Zero observed retained markers always means withholding,
+including samples with calls only at filtered markers.
 
 The evaluation split, metadata, predictions, feasibility report and preprocessing
 artifacts must exist. Dataset identity and canonical plan/configuration are
@@ -93,7 +111,7 @@ uv run --frozen python gs_model_bundle.py predict \
 
 No phenotype is read. Prediction performs no imputation/statistic/PCA/model fit,
 uses no network, and changes none of the training/evaluation/model files. Missing
-calls use the **stored** mean. Output includes sample ID, trait, unit, prediction,
+calls use the **stored** mean if sample QC passes. Output includes sample ID, trait, unit, prediction,
 bundle hash, and whether a permitted reorder occurred.
 
 The default preserves the input sample order and verifies it against panel
@@ -104,6 +122,36 @@ Reordering maps by ID. Unknown encoding, schema or checksum mismatch, missing or
 extra markers (even training-filtered markers), allele/strand flips, reference
 mismatch and out-of-scope context fail. No liftover or allele harmonization is
 attempted. Existing prediction output files are never overwritten.
+
+### Sample status and delivery artifacts (#41)
+
+The CSV adds `prediction_status` (`available` / `withheld`), `reason_codes`,
+`observed_retained_markers`, and `retained_marker_call_rate`. Withheld predictions
+are empty/NaN and must be excluded from selection ranking. Reasons distinguish
+zero observed markers, call rate below the fixed minimum, unavailable legacy QC,
+and rejected model status. Availability means a point prediction passed this QC,
+not permission for customer deployment.
+
+The command also publishes `OUTPUT.csv.withheld.csv` for re-genotyping/review and
+`OUTPUT.csv.metadata.json` as a final checksum-bound receipt. A delivery is complete
+only when the receipt exists and both CSV checksums agree. Publication refuses an
+existing artifact and rolls back files created by a failed publication. A process
+kill before the final receipt may leave incomplete files; do not treat them as a
+completed delivery or overwrite them on retry.
+
+CSV and receipt preserve model status, declared scope, validation scenario,
+unverified conditions (in the model card), and point-prediction-only limitations.
+`customer_release_authorized` is always false here. There is no new approval
+authority: an optional historical `review_reference` is carried through as text,
+not verified acceptance. New fits remain `research_only`; conditional or rejected
+states in a valid bundle are retained, and rejected models yield no predictions.
+Customer acceptance remains in the readiness review/validation workflow.
+
+Schema v1 bundles remain readable, but do not contain an adopted sample-QC
+policy: all their predictions are withheld with `legacy_qc_policy_unavailable`.
+Generate a new v2 bundle with explicit policy/evidence before using this delivery
+path. A QC policy cannot silently be inserted into a schema v1 bundle. Allele,
+reference, checksum, offline and no-refit checks continue to apply.
 
 Checksums detect accidental changes relative to the declared manifest, not an
 authentic origin: someone who can rewrite files and recompute every hash can
