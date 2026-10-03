@@ -51,6 +51,10 @@ def _fold(train, test, fit, validation, all_observations):
 def make_plan(dataset, config, policy=None):
     policy = dict(policy or {"scenario": "family_lofo", "selection_fraction": 0.2})
     scenario = policy.get("scenario")
+    if dataset.selection_unit == "line" and scenario != "family_lofo":
+        raise ValueError(
+            "single-trial line means currently support family_lofo only; no cross-environment or future-year claim"
+        )
     fraction = policy.get("selection_fraction")
     if type(fraction) not in (float, int) or not 0 < fraction <= 1:
         raise ValueError("selection_fraction must be in (0, 1]")
@@ -162,6 +166,13 @@ def make_plan(dataset, config, policy=None):
         "bootstrap_group": bootstrap_group,
         "folds": folds,
     }
+    if dataset.selection_unit == "line":
+        plan.update(
+            schema_version=3,
+            selection_unit="line",
+            phenotype_processing_hash=dataset.phenotype_processing["processing_hash"],
+            prediction_target="within_trial_raw_line_mean",
+        )
     plan["plan_hash"] = run_manifest.canonical_json_hash(plan)
     return plan
 

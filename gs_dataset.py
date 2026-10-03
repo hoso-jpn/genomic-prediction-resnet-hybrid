@@ -6,6 +6,7 @@ import csv
 import json
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,112 @@ class GsDataset:
     source_paths: tuple[Path, ...]
     excluded_samples: tuple[str, ...]
     excluded_observations: tuple[str, ...]
+    phenotype_processing: dict[str, Any] = dataclass_field(default_factory=dict)
+
+    @property
+    def selection_unit(self):
+        return self.manifest.get("selection_unit", "observation")
+
+
+def validate_phenotype_contract(manifest):
+    """Support one explicit within-trial mean, never infer environmental correction."""
+    aggregation = manifest.get("aggregation")
+    if manifest["schema_version"] == 1:
+        if manifest.get("selection_unit", "observation") != "observation":
+            raise ValueError("line selection requires dataset schema v2")
+        if aggregation != {"method": "none", "measurement_type": "raw"}:
+            raise ValueError(
+                "only raw observations without aggregation are supported; BLUE/BLUP require fold-aware correction"
+            )
+        return
+    expected = {
+        "method": "within_trial_line_mean",
+        "measurement_type": "raw",
+        "replicate_weighting": "equal",
+        "line_weighting": "equal",
+        "missing_policy": "exclude_observation",
+        "unbalanced_replicates": "allow",
+        "genotype_policy": "identical_including_missing",
+    }
+    if manifest.get("selection_unit") != "line" or not isinstance(aggregation, dict):
+        raise ValueError("schema v2 requires explicit line selection and aggregation")
+    if set(aggregation) != {*expected, "trial"} or any(
+        aggregation[k] != v for k, v in expected.items()
+    ):
+        raise ValueError(
+            "unsupported line aggregation/design; only raw within-trial equal line means are supported"
+        )
+    trial = aggregation["trial"]
+    if (
+        not isinstance(trial, dict)
+        or set(trial) != {"year", "site"}
+        or type(trial["year"]) is not int
+        or not 1000 <= trial["year"] <= 9999
+    ):
+        raise ValueError("line trial requires a four-digit integer year and site")
+    require_text(trial["site"], "line trial site")
+
+
+def aggregate_lines(
+    observations, metadata, panel, manifest, *, source_count, missing_count
+):
+    """Mean within each line only, giving every line one equal-weight training row."""
+    trial = manifest["aggregation"]["trial"]
+    positions = {sample: i for i, sample in enumerate(panel.sample_ids)}
+    rows, lineage = [], []
+    for line, frame in observations.groupby("line_id", sort=True):
+        samples = sorted(metadata.loc[metadata.line_id == line, "sample_id"])
+        reference = panel.genotypes[positions[samples[0]]]
+        if any(
+            not np.array_equal(reference, panel.genotypes[positions[s]], equal_nan=True)
+            for s in samples[1:]
+        ):
+            raise ValueError(
+                f"ambiguous genotype for line {line}: samples must agree including missing calls"
+            )
+        frame = frame.sort_values("observation_id")
+        ids = frame.observation_id.tolist()
+        record = frame.iloc[0].to_dict()
+        record.update(
+            observation_id="line:" + line,
+            sample_id=samples[0],
+            replicate="line_mean",
+            value=float(frame.value.mean()),
+            source_observation_count=len(frame),
+        )
+        rows.append(record)
+        lineage.append(
+            {
+                "line_id": line,
+                "evaluation_id": record["observation_id"],
+                "sample_ids": samples,
+                "source_observation_ids": ids,
+                "observation_weights": [1.0 / len(ids)] * len(ids),
+                "training_weight": 1.0,
+            }
+        )
+    result = pd.DataFrame(rows)
+    processing = {
+        "schema_version": 1,
+        "selection_unit": "line",
+        "target": "within_trial_raw_line_mean",
+        "trial": trial,
+        "aggregation": manifest["aggregation"],
+        "environment_correction": "none",
+        "correction_parameters": {},
+        "correction_fit_ids": [],
+        "counts": {
+            "source_observations": source_count,
+            "usable_observations": len(observations),
+            "missing_observations": missing_count,
+            "lines": len(result),
+            "families": int(result.family_id.nunique()),
+            "genotype_samples": len(panel.sample_ids),
+        },
+        "lineage": lineage,
+    }
+    processing["processing_hash"] = run_manifest.canonical_json_hash(processing)
+    return result, processing
 
 
 def read_table(path: Path, required: tuple[str, ...]) -> pd.DataFrame:
@@ -123,7 +230,7 @@ def load_dataset(
     if (
         not isinstance(manifest, dict)
         or type(manifest.get("schema_version")) is not int
-        or manifest.get("schema_version") != 1
+        or manifest.get("schema_version") not in (1, 2)
         or manifest.get("kind") != "gs_individual_dataset"
     ):
         raise ValueError(
@@ -143,10 +250,7 @@ def load_dataset(
         )
     if manifest.get("effect_allele") != "ALT":
         raise ValueError("effect_allele must be ALT for this dosage encoding")
-    if manifest.get("aggregation") != {"method": "none", "measurement_type": "raw"}:
-        raise ValueError(
-            "only raw observations without aggregation are supported; BLUE/BLUP require fold-aware correction"
-        )
+    validate_phenotype_contract(manifest)
     panel_manifest = relative_file(path.parent, manifest.get("panel_manifest"))
     if panel_manifest.name != cohort + gs_panel.MANIFEST_SUFFIX:
         raise ValueError("panel manifest name/cohort mismatch")
@@ -218,6 +322,14 @@ def load_dataset(
     if not observations.year.str.fullmatch(r"[0-9]{4}").all():
         raise ValueError("year must be a four-digit year")
     observations["year"] = observations.year.astype(int)
+    if manifest.get("selection_unit") == "line":
+        trial = manifest["aggregation"]["trial"]
+        if set(observations.year) != {trial["year"]} or set(observations.site) != {
+            trial["site"]
+        }:
+            raise ValueError(
+                "unsupported line trial: every observation must use the declared single year/site"
+            )
     observation_lines = observations.merge(
         metadata[["sample_id", "line_id"]],
         on="sample_id",
@@ -239,11 +351,23 @@ def load_dataset(
     if not np.isfinite(values[~missing]).all() or not np.isfinite(values).any():
         raise ValueError("trait is all missing or contains infinite values")
     excluded_observations = tuple(observations.loc[missing, "observation_id"])
+    source_count = len(observations)
     observations = observations.loc[~missing].copy()
     observations["value"] = values[~missing]
     observations = observations.merge(
         metadata, on="sample_id", how="left", validate="many_to_one", sort=False
     )
+    phenotype_processing = {}
+    included_samples = set(observations.sample_id)
+    if manifest.get("selection_unit") == "line":
+        observations, phenotype_processing = aggregate_lines(
+            observations,
+            metadata,
+            panel,
+            manifest,
+            source_count=source_count,
+            missing_count=len(excluded_observations),
+        )
     if observations.shape[0] * panel.genotypes.shape[1] * 8 * 4 > max_memory_bytes:
         raise ValueError("expanded observation matrix exceeds training input budget")
     positions = {sample: i for i, sample in enumerate(panel.sample_ids)}
@@ -267,8 +391,9 @@ def load_dataset(
         manifest,
         provenance,
         sources,
-        tuple(s for s in panel.sample_ids if s not in set(observations.sample_id)),
+        tuple(s for s in panel.sample_ids if s not in included_samples),
         excluded_observations,
+        phenotype_processing,
     )
     verify_unchanged(result)
     return result

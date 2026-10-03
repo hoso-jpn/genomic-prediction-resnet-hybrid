@@ -64,8 +64,11 @@ binding was added must be regenerated. Their checksums are stored and checked
 again after fitting. The full
 supplied training observation set is then fitted with the chosen GBLUP QC;
 training-mean imputation, marker selection, allele frequency/VanRaden scale and
-REML are computed once. Repeated observations retain the explicitly supplied
-weights implicit in their rows; no new averaging is introduced.
+REML are computed once. Schema v1 datasets retain observation rows and their
+implicit weights. Schema v2 line datasets reuse their declared within-trial
+line means and equal line weights; fit-final does not change the aggregation.
+For line models, the hashed bundle carries phenotype processing and binds the
+evaluation's line-candidate/processing artifacts as well.
 
 GBLUP's dual coefficients are converted to marker coefficients:
 `beta = centered_training_genotypes.T @ dual_coefficients / denominator`.
@@ -113,6 +116,13 @@ No phenotype is read. Prediction performs no imputation/statistic/PCA/model fit,
 uses no network, and changes none of the training/evaluation/model files. Missing
 calls use the **stored** mean if sample QC passes. Output includes sample ID, trait, unit, prediction,
 bundle hash, and whether a permitted reorder occurred.
+
+For a schema v2 line dataset's model, add `"target_trial": {"year": 2025,
+"site": "A"}` to the context, using the exact trial declared at training. Other
+years/sites are rejected; this model predicts a within-trial raw line mean, not
+environment-adjusted genetic value. The prediction CSV still uses new genotype
+sample IDs, without inventing line IDs or merging new samples. Target and the
+training phenotype-processing contract are carried into the delivery receipt.
 
 The default preserves the input sample order and verifies it against panel
 metadata. To assert a specific requested output order, pass `--sample-ids ids.txt`
