@@ -36,7 +36,17 @@ def fitted(individual_dataset):
         "rollback_bundle": "none_initial",
     }
     path = individual_dataset.parent / "model"
-    bundle = bundles.fit_final(dataset, evaluation, path, scope=scope)
+    bundle = bundles.fit_final(
+        dataset,
+        evaluation,
+        path,
+        scope=scope,
+        prediction_qc={
+            "min_retained_marker_call_rate": 0.5,
+            "basis": "synthetic test policy, not customer validated",
+            "evidence_references": [],
+        },
+    )
     return dataset, evaluation, path, bundle
 
 
@@ -238,5 +248,169 @@ def test_predict_cli_writes_id_bound_csv_once(fitted, tmp_path, monkeypatch):
     )
     bundles.main()
     assert output.read_text().splitlines()[1].startswith("NA,")
+    receipt = json.loads(output.with_suffix(".csv.metadata.json").read_text())
+    assert not receipt["customer_release_authorized"]
+    assert receipt["checksums"][output.name] == run_manifest.sha256_file(output)
+    assert output.with_suffix(".csv.withheld.csv").is_file()
     with pytest.raises(FileExistsError):
         bundles.main()
+
+
+def small_bundle(threshold=0.5, status="research_only"):
+    return bundles.GblupBundle(
+        {
+            "schema_version": 2,
+            "fit": {"intercept": 12.5},
+            "prediction_qc": {
+                "min_retained_marker_call_rate": threshold,
+                "basis": "synthetic-only boundary probe",
+                "evidence_references": [],
+            },
+            "model_card": {"status": status},
+        },
+        np.array([True, True, True, True, False]),
+        np.array([0.25, -0.25, 0.0, 0.0]),
+        np.array([2.0, -3.0, 1.0, 1.0]),
+    )
+
+
+def test_retained_calls_boundaries_and_batch_independence():
+    bundle = small_bundle()
+    matrix = np.array(
+        [
+            [np.nan, np.nan, np.nan, np.nan, np.nan],
+            [np.nan, np.nan, np.nan, np.nan, 1.0],
+            [1.0, np.nan, np.nan, np.nan, 1.0],
+            [1.0, 0.0, np.nan, np.nan, np.nan],
+            [1.0, 0.0, -1.0, np.nan, np.nan],
+        ]
+    )
+    _, observed, rates, reasons = bundle.prediction_qc(matrix)
+    np.testing.assert_array_equal(observed, [0, 0, 1, 2, 3])
+    np.testing.assert_array_equal(rates, [0, 0, 0.25, 0.5, 0.75])
+    assert "no_observed_retained_markers" in reasons[0]
+    assert "no_observed_retained_markers" in reasons[1]
+    predictions = bundle.predict_matrix(matrix)
+    assert np.isnan(predictions[:3]).all()
+    expected = 12.5 + (1.0 - 0.25) * 2 + (0.0 + 0.25) * -3
+    assert predictions[3] == expected
+    assert predictions[4] == expected - 1
+    assert bundle.predict_matrix(matrix[[3]])[0] == predictions[3]
+    assert np.isnan(bundle.predict_matrix(matrix[:3])).all()
+
+
+@pytest.mark.parametrize(
+    "threshold", [0, -0.1, 1.1, True, float("nan"), float("inf"), "0.5"]
+)
+def test_bad_prediction_qc_threshold_rejected(threshold):
+    policy = small_bundle().metadata["prediction_qc"]
+    policy["min_retained_marker_call_rate"] = threshold
+    with pytest.raises(ValueError, match="call rate"):
+        bundles.validate_prediction_qc(policy)
+
+
+def test_legacy_policy_missing_and_rejected_models_are_withheld():
+    bundle = small_bundle()
+    bundle.metadata.pop("prediction_qc")
+    assert np.isnan(bundle.predict_matrix(np.zeros((1, 5)))).all()
+    assert bundle.prediction_qc(np.zeros((1, 5)))[3] == [
+        ["legacy_qc_policy_unavailable"]
+    ]
+    rejected = small_bundle(status="rejected")
+    assert rejected.prediction_qc(np.zeros((1, 5)))[3] == [["model_not_accepted"]]
+    assert np.isnan(rejected.predict_matrix(np.zeros((1, 5)))).all()
+
+
+@pytest.mark.parametrize("status", ["conditional", "rejected"])
+def test_recorded_status_is_preserved_without_release_authorization(fitted, status):
+    panel = new_panel(fitted)
+    metadata_path = fitted[2] / "bundle.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["model_card"]["status"] = status
+    metadata["model_card"]["review_reference"] = "external-review-record; unverified"
+    metadata.pop("bundle_hash")
+    metadata["bundle_hash"] = run_manifest.canonical_json_hash(metadata)
+    metadata_path.write_text(json.dumps(metadata))
+    result = bundles.predict(fitted[2], panel, context=context())
+    assert set(result.model_status) == {status}
+    assert not result.attrs["delivery_metadata"]["customer_release_authorized"]
+    if status == "rejected":
+        assert result.prediction.isna().all()
+        assert set(result.prediction_status) == {"withheld"}
+
+
+def test_v1_bundle_reads_but_withholds_until_explicit_new_policy(fitted):
+    panel = new_panel(fitted)
+    metadata_path = fitted[2] / "bundle.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["schema_version"] = 1
+    metadata.pop("prediction_qc")
+    metadata.pop("bundle_hash")
+    metadata["bundle_hash"] = run_manifest.canonical_json_hash(metadata)
+    metadata_path.write_text(json.dumps(metadata))
+    result = bundles.predict(fitted[2], panel, context=context())
+    assert result.prediction.isna().all()
+    assert set(result.reason_codes) == {"legacy_qc_policy_unavailable"}
+
+
+def test_qc_reorder_delivery_and_all_withheld(fitted, tmp_path):
+    dataset, _, path, bundle = fitted
+    keys = dataset.panel.variant_keys.tolist()
+    rows = np.zeros((len(keys), 3)).astype(str)
+    rows[:, 0] = "nan"
+    rows[bundle.marker_mask, 1] = "nan"
+    panel = _write_panel(
+        tmp_path / "qc-panel",
+        cohort_id="new",
+        samples=["all-missing", "filtered-only", "valid"],
+        variants=keys[::-1],
+        rows=rows[::-1].tolist(),
+        manifest_overrides={"checksums": {"synthetic.fa": "sha256:" + "a" * 64}},
+    )
+    result = bundles.predict(
+        path,
+        panel,
+        context=context(),
+        allow_reorder=True,
+        expected_sample_ids=["valid", "filtered-only", "all-missing"],
+    )
+    assert list(result.prediction_status) == ["available", "withheld", "withheld"]
+    assert result.prediction.iloc[1:].isna().all()
+    assert set(result.model_status) == {"research_only"}
+    output = tmp_path / "predictions.csv"
+    bundles.write_predictions(result, output)
+    receipt = json.loads(output.with_suffix(".csv.metadata.json").read_text())
+    assert receipt["counts"] == {"samples": 3, "available": 1, "withheld": 2}
+    assert receipt["prediction_qc"] == bundle.metadata["prediction_qc"]
+    import pandas as pd
+
+    held = pd.read_csv(output.with_suffix(".csv.withheld.csv"))
+    assert set(held.sample_id) == {"filtered-only", "all-missing"}
+    assert held.prediction.isna().all()
+
+
+def test_publication_does_not_overwrite_or_leave_partial_files(
+    fitted, tmp_path, monkeypatch
+):
+    panel = new_panel(fitted)
+    result = bundles.predict(fitted[2], panel, context=context())
+    output = tmp_path / "result.csv"
+    existing = output.with_suffix(".csv.withheld.csv")
+    existing.write_text("existing")
+    with pytest.raises(FileExistsError):
+        bundles.write_predictions(result, output)
+    assert existing.read_text() == "existing"
+    assert not output.exists()
+    existing.unlink()
+    real_link = bundles.os.link
+
+    def fail_second(source, destination):
+        if destination == existing:
+            raise OSError("simulated publish failure")
+        real_link(source, destination)
+
+    monkeypatch.setattr(bundles.os, "link", fail_second)
+    with pytest.raises(OSError, match="simulated"):
+        bundles.write_predictions(result, output)
+    assert not output.exists()
+    assert not output.with_suffix(".csv.metadata.json").exists()
