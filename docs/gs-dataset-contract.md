@@ -66,7 +66,7 @@ values use only empty text, `NA` or `nan`. Their observation IDs and genotype
 samples with no usable phenotype are recorded as exclusions. All-missing traits,
 nonfinite nonmissing values and unmatched phenotype sample IDs fail.
 
-Only raw measurements with `aggregation.method=none` are currently supported.
+Schema v1 supports only raw measurements with `aggregation.method=none`.
 BLUE, BLUP and preaggregated values are rejected explicitly. A future adapter
 must record the correction fit set and apply corrections within each split;
 precorrection using outer test phenotypes is not permitted. Repeated observations
@@ -160,10 +160,10 @@ for exact-k use ascending opaque observation IDs. Missing pairs are counted and
 excluded. Constant predictions/targets, fewer than two pairs, and all-missing
 inputs produce unavailable ranking metrics, not a spurious favorable score.
 
-**Selection unit is the observation**, explicitly, not an automatically averaged
+**Schema v1 selection unit is the observation**, not an automatically averaged
 breeding line. Repeated measurements retain their IDs. For actual line selection,
-a trial-specific aggregation policy and fold-aware phenotype model are still
-required; this implementation does not silently average test replicates.
+use the bounded schema v2 contract below. Environmental correction still requires
+a future fold-aware phenotype model; neither mode silently infers one.
 
 Group bootstrap uses family for LOFO/family+environment and line for future-year
 prediction. It resamples whole groups including repetitions; fewer than three
@@ -179,3 +179,79 @@ application population. Review before each season/generation/population change;
 collect independent target-year/environment observations as the next trial.
 Different scenarios remain separate runs/reports and are not pooled into a
 cross-scenario superiority ranking. #6 remains the original SoyNAM experiment.
+
+## Explicit line selection in one trial: schema v2 (#40)
+
+The first supported line-level design is **one declared year and one site**, raw
+continuous measurements, and equal-weight replicate means within each line.
+This estimates a **within-trial raw line mean**, not an environment-adjusted
+phenotype, breeding value, G×E response, or future-year yield. The study operator
+must establish that these raw replicates are comparable under this design.
+No block, spatial or environmental effect is inferred from replicate identifiers.
+
+Use the same files, trait and reference fields, and change these manifest fields:
+
+```json
+{
+  "schema_version": 2,
+  "selection_unit": "line",
+  "aggregation": {
+    "method": "within_trial_line_mean",
+    "measurement_type": "raw",
+    "trial": {"year": 2025, "site": "A"},
+    "replicate_weighting": "equal",
+    "line_weighting": "equal",
+    "missing_policy": "exclude_observation",
+    "unbalanced_replicates": "allow",
+    "genotype_policy": "identical_including_missing"
+  }
+}
+```
+
+Every input observation must match this year/site, even if its value is missing.
+Multiple environments, BLUE/BLUP, environment/replicate-effect corrections,
+alternative weighting and undeclared aggregation are rejected. Unbalanced
+replicate counts are explicitly allowed: each nonmissing observation has weight
+`1 / usable_replicates_for_this_line`; each resulting line has training weight
+`1`. Thus more measured replicates do not silently create more training rows or
+selection slots. These weights do not claim equal measurement precision. Missing
+observations remain in the exclusion list; a line with no usable observations
+does not train. Source observations, usable observations, lines, families and
+genotype samples are counted separately.
+
+Multiple genotype samples for one line are allowed only if **every marker,
+including each missing position**, agrees. There is no consensus or imputation
+to resolve disagreement. The lexically smallest sample ID is the deterministic
+representative; all sample IDs and source observation IDs are recorded. Sample
+IDs without phenotype remain exclusions even when a genotype-equivalent sample
+supplies a line observation. A line's mean depends only on that line's values.
+
+Schema v2 currently supports **family LOFO only**. A line belongs to one family,
+so all its raw replicates enter the same outer/inner partition. Scenario plan v3
+binds the processing hash and target. No environmental correction is fitted:
+`correction_parameters={}` and `correction_fit_ids=[]` are intentional. Fold
+records identify outer training lines and inner fit/validation IDs. Tests change
+only held-out targets and verify unchanged training marker masks, transforms,
+GBLUP parameters and ResNet epoch selection. This does **not** validate a future
+environment-correction algorithm.
+
+Evaluation adds `phenotype_processing.json` (source-ID lineage, observation
+weights, counts, contract and hash) and `line_candidates.csv`. Both are bound
+to evaluation metadata checksums. Candidate rows are unique per model/line and
+carry rank, selected flag, plan/processing hashes, target and model decision.
+Selection is `ceil(number_of_evaluable_lines * fraction)`; ties use opaque
+line IDs. Nonfinite predictions are never selected. Family bootstrap preserves
+family dependence; it is not an individual prediction interval or evidence for
+new environments. The candidate table remains held-out research evidence and
+always has `customer_release_authorized=false`.
+
+For A measured twice and B/C once, 50% line selection means 2 of 3 lines, not two
+rows from A. Existing schema v1 observation metrics and plans remain unchanged.
+
+Fit-final binds the two new evaluation artifacts and carries the same processing
+contract into the model bundle. Offline prediction requires a `target_trial`
+context matching the declared year/site and carries the target into output and
+receipt. It still predicts by genotype sample ID; it does not infer new line IDs
+or merge a new assay's samples. New years/sites and customer deployment require
+separate validation. All fixtures here are synthetic; real adzuki performance
+and customer-cohort validity remain unverified.

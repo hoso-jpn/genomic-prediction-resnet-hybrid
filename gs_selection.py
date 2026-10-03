@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+import pandas as pd
 from scipy.stats import rankdata
 
 
@@ -117,7 +118,7 @@ def feasibility_report(predictions, dataset, plan):
             if uncertainty["interval"] is None
             else "requires_independent_validation_and_domain_review",
         }
-    return {
+    report = {
         "schema_version": 1,
         "scenario": plan["policy"],
         "models": models,
@@ -137,3 +138,49 @@ def feasibility_report(predictions, dataset, plan):
         "update_review": "before each new season, generation or changed target population",
         "tie_policy": "average Spearman ranks; exact-k ties broken by opaque observation_id",
     }
+    if dataset.selection_unit == "line":
+        report.update(
+            schema_version=2,
+            selection_unit="line",
+            prediction_target="within_trial_raw_line_mean",
+            phenotype_processing=dataset.phenotype_processing,
+            plan_hash=plan["plan_hash"],
+        )
+        report["limitations"][-1] = (
+            "Lines have equal training weight after within-trial raw replicate means; "
+            "no environmental correction, GxE model or breeding-value interpretation."
+        )
+        report["tie_policy"] = (
+            "average Spearman ranks; exact-k ties broken by opaque line_id"
+        )
+    return report
+
+
+def line_candidates(predictions, dataset, plan, report):
+    """Rank unique held-out lines; this table is research evidence, not release approval."""
+    if dataset.selection_unit != "line":
+        raise ValueError("line candidates require a line dataset")
+    blocks = []
+    direction = dataset.manifest["trait"]["direction"]
+    for model, frame in predictions.groupby("model", sort=True):
+        if frame.line_id.duplicated().any():
+            raise ValueError("line candidates contain duplicate line IDs")
+        frame = frame.copy()
+        eligible = np.isfinite(frame.predicted) & np.isfinite(frame.observed)
+        ranked = frame.loc[eligible].sort_values(
+            ["predicted", "line_id"], ascending=[direction == "lower", True]
+        )
+        ranks = {line: index + 1 for index, line in enumerate(ranked.line_id)}
+        frame["rank"] = frame.line_id.map(ranks).astype("Int64")
+        k = math.ceil(len(ranked) * plan["policy"]["selection_fraction"])
+        frame["selected"] = frame.line_id.isin(ranked.line_id.iloc[:k])
+        frame["selection_unit"] = "line"
+        frame["prediction_target"] = "within_trial_raw_line_mean"
+        frame["model_decision"] = report["models"][model]["decision"]
+        frame["customer_release_authorized"] = False
+        frame["plan_hash"] = plan["plan_hash"]
+        frame["phenotype_processing_hash"] = dataset.phenotype_processing[
+            "processing_hash"
+        ]
+        blocks.append(frame.sort_values(["rank", "line_id"], na_position="last"))
+    return pd.concat(blocks, ignore_index=True)

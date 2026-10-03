@@ -146,6 +146,11 @@ def fit_final(
             "preprocessing.npz",
         )
     ]
+    if dataset.selection_unit == "line":
+        evidence_paths.extend(
+            evaluation_dir / name
+            for name in ("line_candidates.csv", "phenotype_processing.json")
+        )
     evidence_hashes = {p.name: run_manifest.sha256_file(p) for p in evidence_paths}
     plan = json.loads(evidence_paths[0].read_text())
     config = gs_evaluate.validate_plan(dataset, plan)
@@ -237,6 +242,12 @@ def fit_final(
             "uncertainty": "point predictions only; no calibrated prediction interval",
         },
     }
+    if dataset.selection_unit == "line":
+        metadata["phenotype_processing"] = dataset.phenotype_processing
+        metadata["model_card"]["prediction_target"] = "within_trial_raw_line_mean"
+        metadata["model_card"]["unverified_conditions"] += (
+            "; other trial years/sites, environmental correction and breeding values"
+        )
     bundle = GblupBundle(
         metadata, relations.retained_markers, relations.marker_means, coefficients
     )
@@ -374,14 +385,22 @@ def predict(
 ):
     bundle = load_bundle(bundle_path)
     metadata = bundle.metadata
-    if not isinstance(context, dict) or set(context) != {
+    context_fields = {
         "species",
         "assembly_id",
         "cohort_id",
         "generation",
-    }:
+    }
+    processing = metadata.get("phenotype_processing")
+    if processing is not None:
+        context_fields.add("target_trial")
+    if not isinstance(context, dict) or set(context) != context_fields:
         raise ValueError(
-            "prediction context requires species, assembly_id, cohort_id and generation"
+            "prediction context requires species, assembly_id, cohort_id, generation and target_trial for a line-mean model"
+        )
+    if processing is not None and context["target_trial"] != processing["trial"]:
+        raise ValueError(
+            "line-mean model is restricted to its declared target trial; other years/sites are unvalidated"
         )
     scope = metadata["model_card"]["scope"]
     if (
@@ -450,6 +469,7 @@ def predict(
                 card.get("validation_scenario"), sort_keys=True
             ),
             "declared_scope": json.dumps(card["scope"], sort_keys=True),
+            "prediction_target": card.get("prediction_target", "raw_observation"),
         }
     )
     result.attrs["delivery_metadata"] = {
@@ -459,6 +479,7 @@ def predict(
         "context": context,
         "model_card": card,
         "prediction_qc": metadata.get("prediction_qc"),
+        "phenotype_processing": metadata.get("phenotype_processing"),
         "counts": {
             "samples": len(result),
             "available": int((~withheld).sum()),

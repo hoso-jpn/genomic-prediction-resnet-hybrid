@@ -201,6 +201,21 @@ def _evaluate(dataset, plan, output_dir: Path):
                 "target_scale": record.final_target_scale,
             }
         )
+        if dataset.selection_unit == "line":
+            records[-1]["phenotype_processing"] = {
+                "method": "within_trial_line_mean",
+                "environment_correction": "none",
+                "correction_parameters": {},
+                "correction_fit_ids": [],
+                "outer_training_line_ids": dataset.observations.iloc[
+                    train
+                ].line_id.tolist(),
+                "inner_fit_ids": fold["fit"],
+                "validation_ids": fold["validation"],
+                "aggregation_fit_scope": "within each line only; no cross-line statistics",
+                "line_training_weight": 1.0,
+                "processing_hash": dataset.phenotype_processing["processing_hash"],
+            }
         for model, predictions in model_predictions:
             for position, prediction in zip(test, predictions, strict=True):
                 observation = dataset.observations.iloc[position]
@@ -245,12 +260,20 @@ def _evaluate(dataset, plan, output_dir: Path):
         )
         np.savez_compressed(temporary / "preprocessing.npz", **arrays)
         predictions.to_csv(temporary / "predictions.csv", index=False)
-        bound_artifacts = (
+        bound_artifacts = [
             "split.json",
             "feasibility.json",
             "preprocessing.npz",
             "predictions.csv",
-        )
+        ]
+        if dataset.selection_unit == "line":
+            gs_selection.line_candidates(predictions, dataset, plan, report).to_csv(
+                temporary / "line_candidates.csv", index=False
+            )
+            write_json(
+                temporary / "phenotype_processing.json", dataset.phenotype_processing
+            )
+            bound_artifacts.extend(["line_candidates.csv", "phenotype_processing.json"])
         write_json(
             temporary / "metadata.json",
             {
